@@ -35,9 +35,16 @@
     <div id="d-key"></div>
     <div id="d-text"></div>
     <textarea id="d-edit" hidden></textarea>
+    <div id="d-extra"></div>
     <div class="row">
       <time id="d-date"></time>
       <div class="acts">
+        <button id="d-merge" aria-label="merge">
+          <svg viewBox="0 0 24 24"><circle cx="9" cy="12" r="5"/><circle cx="15" cy="12" r="5"/></svg>
+        </button>
+        <button id="d-build" aria-label="build prompt">
+          <svg viewBox="0 0 24 24"><path d="M8.5 8L4.5 12l4 4M15.5 8l4 4-4 4M13.5 5.5l-3 13"/></svg>
+        </button>
         <button id="d-editbtn" aria-label="edit">
           <svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16v4zM13.5 6.5l4 4"/></svg>
         </button>
@@ -51,6 +58,14 @@
     </div>
   </section>
 
+  <section id="ask" class="sheet" aria-hidden="true">
+    <div class="grip"></div>
+    <div id="ask-q"></div>
+    <div id="ask-title"></div>
+    <div id="ask-insight"></div>
+    <ul id="ask-list"></ul>
+  </section>
+
   <section id="settings" class="sheet" aria-hidden="true">
     <div class="grip"></div>
     <label class="field">
@@ -61,6 +76,8 @@
       <span>Model</span>
       <div id="s-model" class="seg"></div>
     </div>
+    <div class="field" id="s-asks-label"><span>?</span></div>
+    <div id="s-asks"></div>
     <div class="btns">
       <button id="s-recluster">다시 묶기</button>
       <button id="s-export">내보내기</button>

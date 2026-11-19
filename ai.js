@@ -14,7 +14,7 @@ export class ApiError extends Error {
   constructor(msg, status) { super(msg); this.status = status; }
 }
 
-async function callClaude({ system, user, schema, maxTokens }) {
+async function callClaude({ system, user, schema, maxTokens, effort = 'low' }) {
   const apiKey = await db.getMeta('apiKey');
   if (!apiKey) throw new ApiError('no key', 0);
   const model = (await db.getMeta('model')) || DEFAULT_MODEL;
@@ -30,7 +30,7 @@ async function callClaude({ system, user, schema, maxTokens }) {
     max_tokens: maxTokens,
     system,
     messages: [{ role: 'user', content: user }],
-    output_config: { effort: 'low', format: { type: 'json_schema', schema } },
+    output_config: { effort, format: { type: 'json_schema', schema } },
   };
   // Opus/Sonnet 5.5: 거절 시 서버가 다른 모델로 자동 재시도
   if (model !== 'claude-haiku-5-5') {
@@ -299,4 +299,128 @@ export async function runQueue({ forceRecluster = false } = {}) {
   } finally {
     running = false;
   }
+}
+
+// ---------- 활용: 질문 · 합치기 · 개발 프롬프트 ----------
+
+const ideaBlock = (i) =>
+  `[${i.id}] ${line(i.keyword) || '(키워드 없음)'}${i.summary ? ' — ' + line(i.summary) : ''}\n${i.text.trim()}`;
+
+const ASK_SYSTEM = `너는 한 사람의 개인 아이디어 노트를 함께 검토하는 날카로운 제품 파트너다.
+메모는 바이브 코딩(AI로 빠르게 만드는 방식)으로 혼자 만들 서비스나 상품 아이디어다.
+사용자가 어떤 기준이나 질문을 주면, 아이디어 전체를 그 기준으로 평가해 JSON으로만 답한다.
+
+- title: 사용자의 기준을 12자 이내로 다듬은 제목.
+- insight: 고른 아이디어들을 전체적으로 본 분석 의견 2~3문장. 공통점, 눈에 띄는 기회나 위험, 무엇부터 해보면 좋을지. 일반론 말고 이 아이디어들에 대한 구체적인 이야기.
+- picks: 기준에 잘 맞는 아이디어만, 잘 맞는 순서로 최대 12개.
+  - id: 목록의 [ ] 안 id 그대로.
+  - score: 기준에 맞는 정도 1~10. 5 미만이면 넣지 말 것.
+  - reason: 왜 맞는지 한 줄(40자 이내). 메모에 근거가 부족하면 추측임을 밝힐 것.
+맞는 아이디어가 없으면 picks는 빈 배열로 두고 insight에 그 이유를 쓴다. 답은 한국어로.`;
+
+const ASK_SCHEMA = {
+  type: 'object',
+  properties: {
+    title: { type: 'string' },
+    insight: { type: 'string' },
+    picks: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { id: { type: 'string' }, score: { type: 'integer' }, reason: { type: 'string' } },
+        required: ['id', 'score', 'reason'],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ['title', 'insight', 'picks'],
+  additionalProperties: false,
+};
+
+export async function ask(query) {
+  const ideas = (await db.all('ideas')).sort((a, b) => a.createdAt - b.createdAt);
+  if (!ideas.length) return { title: query, insight: '', picks: [] };
+  const user = `## 기준\n${query}\n\n## 아이디어 목록\n${ideas.map(ideaBlock).join('\n\n')}`;
+  const r = await callClaude({ system: ASK_SYSTEM, user, schema: ASK_SCHEMA, maxTokens: 8000, effort: 'medium' });
+  const ids = new Set(ideas.map((i) => i.id));
+  const seen = new Set();
+  r.picks = (r.picks || [])
+    .filter((p) => ids.has(p.id) && !seen.has(p.id) && seen.add(p.id))
+    .map((p) => ({ ...p, score: Math.max(1, Math.min(10, p.score | 0)) }))
+    .sort((a, b) => b.score - a.score);
+  return r;
+}
+
+const MERGE_SYSTEM = `너는 아이디어를 엮어 더 강한 제품을 찾아주는 제품 기획자다.
+기준 아이디어 하나와, 그것과 연결된 아이디어들을 받는다. 이들 중 2~3개를 합쳐 하나의 제품 콘셉트를 제안하고 JSON으로만 답한다.
+
+- keyword: 합친 콘셉트의 이름 1~3단어.
+- pitch: 3~4문장. 누구를 위한 무엇인지, 핵심 기능, 그리고 따로 만들 때보다 합쳤을 때 왜 더 나은지.
+- used_ids: 합치는 데 쓴 아이디어의 id(기준 아이디어 포함). 목록에 있는 id만.
+억지스러운 조합은 피하고, 가장 자연스러운 조합 하나만 고른다. 답은 한국어로.`;
+
+const MERGE_SCHEMA = {
+  type: 'object',
+  properties: {
+    keyword: { type: 'string' },
+    pitch: { type: 'string' },
+    used_ids: { type: 'array', items: { type: 'string' } },
+  },
+  required: ['keyword', 'pitch', 'used_ids'],
+  additionalProperties: false,
+};
+
+export async function merge(id) {
+  const base = await db.get('ideas', id);
+  if (!base) throw new Error('missing');
+  const others = (await Promise.all((base.links || []).map((x) => db.get('ideas', x)))).filter(Boolean);
+  const user = `## 기준 아이디어\n${ideaBlock(base)}\n\n## 연결된 아이디어\n${others.map(ideaBlock).join('\n\n')}`;
+  const r = await callClaude({ system: MERGE_SYSTEM, user, schema: MERGE_SCHEMA, maxTokens: 4000, effort: 'medium' });
+  const ok = new Set([base.id, ...others.map((o) => o.id)]);
+  r.used_ids = [...new Set([base.id, ...(r.used_ids || []).filter((x) => ok.has(x))])];
+  r.keyword = line(r.keyword);
+  return r;
+}
+
+const BUILD_SYSTEM = `너는 아이디어를 AI 코딩 도구(Claude Code 등)에 그대로 붙여넣을 개발 지시문으로 바꿔주는 도우미다.
+혼자 바이브 코딩으로 하루~며칠 안에 만들 첫 버전(MVP)을 기준으로, 아래 구성의 한국어 지시문을 JSON의 prompt 필드에 담아 답한다.
+
+구성 (각 항목은 짧은 제목 줄 + 불릿):
+1. 만들 것: 한두 문장 요약
+2. 사용자: 누가, 어떤 순간에 쓰는지
+3. 핵심 기능: 3~5개, 각각 동작이 분명하게
+4. 화면: 화면별 구성과 흐름
+5. 데이터: 무엇을 어디에 저장하는지
+6. 기술: 가장 단순한 선택을 제안 (특별한 이유가 없으면 휴대폰에서 쓰는 단일 웹앱/PWA, 서버 없이 기기 저장). 외부 API가 필요하면 무엇인지
+7. 이번엔 안 할 것: 첫 버전 범위 밖
+8. 완료 기준: 직접 확인할 체크리스트 3~5개
+마지막 줄에 "먼저 전체 구조를 짧게 제안하고, 내가 확인하면 만들어줘."를 넣는다.
+메모에 없는 부분은 합리적으로 채우되, 원래 아이디어의 의도를 바꾸지 않는다. 마크다운 제목(#)은 쓰지 말고 번호와 불릿만 쓴다.`;
+
+const BUILD_SCHEMA = {
+  type: 'object',
+  properties: { prompt: { type: 'string' } },
+  required: ['prompt'],
+  additionalProperties: false,
+};
+
+export async function buildPrompt(id) {
+  const it = await db.get('ideas', id);
+  if (!it) throw new Error('missing');
+  const linked = (await Promise.all((it.links || []).map((x) => db.get('ideas', x)))).filter(Boolean);
+  const ctx = linked.length ? `\n\n## 참고: 연결된 아이디어(필요할 때만 반영)\n${linked.map((l) => `- ${line(l.keyword)}: ${line(l.summary)}`).join('\n')}` : '';
+  const user = `## 아이디어\n${it.text.trim()}${ctx}`;
+  const r = await callClaude({ system: BUILD_SYSTEM, user, schema: BUILD_SCHEMA, maxTokens: 8000, effort: 'medium' });
+  const fresh = await db.get('ideas', id);
+  if (fresh) { fresh.buildPrompt = r.prompt; fresh.buildFor = fresh.text; await db.put('ideas', fresh); }
+  return r.prompt;
+}
+
+export function errorText(e) {
+  if (!(e instanceof ApiError)) return '✕';
+  if (e.status === 0) return 'API key';
+  if (e.status === -1) return '오프라인';
+  if (e.status === 401 || e.status === 403) return '키 오류';
+  if (e.status === 429) return '잠시 후';
+  return '✕';
 }

@@ -128,14 +128,12 @@ export function createMap(svgEl, { onTap }) {
         g.append('circle').attr('class', 'hit').attr('r', 22);
         g.append('circle').attr('class', 'dot');
         g.append('text').attr('class', 'label').attr('dy', 16);
-        g.transition().duration(700).style('opacity', 1);
+        g.transition().duration(700).style('opacity', 1).on('end', function () { this.style.removeProperty('opacity'); });
         return g;
       })
       .classed('pending', (d) => d.status !== 'done')
       .on('click', (e, d) => onTap?.(d.id));
-    nodeSel.select('circle.dot')
-      .attr('r', (d) => 2.6 + Math.min(d.degree, 5) * 0.5)
-      .attr('fill', (d) => d.color);
+    nodeSel.select('circle.dot').attr('fill', (d) => d.color);
     nodeSel.select('text.label').text((d) => d.label).attr('fill', (d) => d.color);
 
     const shown = clusters.filter((c) => (counts.get(c.id) || 0) >= 2);
@@ -144,6 +142,7 @@ export function createMap(svgEl, { onTap }) {
       .text((c) => c.name)
       .attr('fill', (c) => clusterColor(c.color));
 
+    applyLens();
     sim.nodes(nodes);
     sim.force('link').links(links);
     sim.alpha(prev.size ? 0.5 : 0.9).restart();
@@ -172,5 +171,28 @@ export function createMap(svgEl, { onTap }) {
     linkSel.classed('lit', (d) => id && (d.source.id === id || d.target.id === id));
   }
 
-  return { update, focus, select };
+  // 질문 결과: 고른 노드만 밝게, 점수만큼 크게
+  let lensMap = null;
+  const baseR = (d) => 2.6 + Math.min(d.degree, 5) * 0.5;
+  function applyLens() {
+    const on = !!lensMap;
+    svg.classed('lens', on);
+    nodeSel.classed('picked', (d) => on && lensMap.has(d.id));
+    nodeSel.select('circle.dot').attr('r', (d) => baseR(d) + (on && lensMap.has(d.id) ? lensMap.get(d.id) * 0.45 : 0));
+    linkSel.classed('picked', (d) => on && lensMap.has(d.source.id ?? d.source) && lensMap.has(d.target.id ?? d.target));
+  }
+  function lens(scores) { lensMap = scores && scores.size ? scores : null; applyLens(); }
+
+  // 고른 노드들이 한 화면에 들어오게
+  function fit(ids) {
+    const m = nodes.filter((n) => ids.includes(n.id));
+    if (!m.length) return;
+    const [x0, x1] = d3.extent(m, (n) => n.x), [y0, y1] = d3.extent(m, (n) => n.y);
+    const viewH = H * 0.42, pad = 60;
+    const k = Math.max(0.4, Math.min(2, (W - pad * 2) / Math.max(1, x1 - x0), (viewH - pad) / Math.max(1, y1 - y0)));
+    svg.transition().duration(700).call(zoom.transform,
+      d3.zoomIdentity.translate(W / 2 - ((x0 + x1) / 2) * k, viewH / 2 + 30 - ((y0 + y1) / 2) * k).scale(k));
+  }
+
+  return { update, focus, select, lens, fit };
 }

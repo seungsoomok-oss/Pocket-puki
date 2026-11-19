@@ -4,7 +4,8 @@ import { createMap, clusterColor } from './map.js';
 
 const $ = (id) => document.getElementById(id);
 const input = $('input'), mic = $('mic'), gear = $('gear'), scrim = $('scrim');
-const detail = $('detail'), settings = $('settings');
+const detail = $('detail'), settings = $('settings'), askSheet = $('ask');
+const SHEETS = [detail, settings, askSheet];
 
 // ---------- 맵 ----------
 const map = createMap($('map'), { onTap: openDetail });
@@ -36,6 +37,7 @@ function autosize() {
   input.style.height = 'auto';
   input.style.height = Math.min(input.scrollHeight, window.innerHeight * 0.3) + 'px';
   mic.classList.toggle('send', input.value.trim().length > 0 && !recognizing);
+  input.classList.toggle('ask', !!askQuery(input.value));
 }
 input.addEventListener('input', autosize);
 input.addEventListener('keydown', (e) => {
@@ -43,9 +45,20 @@ input.addEventListener('keydown', (e) => {
 });
 $('dock').addEventListener('submit', (e) => { e.preventDefault(); save(); });
 
+// "?"(또는 말로 "질문 …")로 시작하면 기록 대신 질문
+function askQuery(text) {
+  const m = text.trim().match(/^(?:[?？]|질문[\s,:]+)\s*([\s\S]+)/);
+  return m ? m[1].trim() : null;
+}
+
 async function save(textArg) {
   const text = (textArg ?? input.value).trim();
   if (!text) return;
+  const q = askQuery(text);
+  if (q) {
+    input.value = ''; autosize(); input.blur();
+    return runAsk(q);
+  }
   const now = Date.now();
   await db.put('ideas', { id: db.uid(), text, createdAt: now, updatedAt: now, links: [], clusterId: null, status: 'pending' });
   input.value = '';
@@ -121,13 +134,15 @@ mic.addEventListener('click', () => {
 });
 
 // ---------- 상세 ----------
-const fmt = new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'short', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit' });
+const pad2 = (n) => String(n).padStart(2, '0');
+const fmt = { format: (d) => `${pad2(d.getFullYear() % 100)}.${pad2(d.getMonth() + 1)}.${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}` };
 
 async function openDetail(id) {
   const [it, clusters] = await Promise.all([db.get('ideas', id), db.all('clusters')]);
   if (!it) return;
   current = id;
   setEditing(false);
+  setExtra(null);
   fillDetail(it, clusters);
   openSheet(detail);
   map.select(id);
@@ -141,6 +156,7 @@ function fillDetail(it, clusters) {
   key.style.color = it.keyword ? clusterColor(c ? c.color : null) : 'var(--dim)';
   if ($('d-edit').hidden) $('d-text').textContent = it.text;
   $('d-date').textContent = fmt.format(new Date(it.createdAt));
+  $('d-merge').hidden = !(it.links && it.links.length);
 }
 
 function setEditing(on) {
@@ -194,24 +210,28 @@ $('d-del').addEventListener('click', async () => {
 
 // ---------- 시트 공통 ----------
 function openSheet(el) {
-  [detail, settings].forEach((s) => { s.classList.toggle('open', s === el); s.setAttribute('aria-hidden', s !== el); });
+  SHEETS.forEach((s) => { s.classList.toggle('open', s === el); s.setAttribute('aria-hidden', s !== el); });
   scrim.classList.add('on');
 }
 function closeSheets() {
   if (settings.classList.contains('open')) saveKey();
-  [detail, settings].forEach((s) => { s.classList.remove('open'); s.setAttribute('aria-hidden', 'true'); });
-  scrim.classList.remove('on');
-  document.activeElement?.blur?.();
+  const fromDetail = detail.classList.contains('open');
   current = null;
   map.select(null);
+  document.activeElement?.blur?.();
+  // 질문 결과에서 들어온 상세라면 결과 목록으로 돌아감
+  if (fromDetail && lensActive) { openSheet(askSheet); return; }
+  SHEETS.forEach((s) => { s.classList.remove('open'); s.setAttribute('aria-hidden', 'true'); });
+  scrim.classList.remove('on');
+  if (lensActive) { lensActive = false; map.lens(null); }
 }
 scrim.addEventListener('click', closeSheets);
 
 // 아래로 쓸어내려 닫기
-for (const sheet of [detail, settings]) {
+for (const sheet of SHEETS) {
   let y0 = null, dy = 0;
   sheet.addEventListener('touchstart', (e) => {
-    if (sheet.scrollTop > 0 || e.target.closest('textarea,input')) { y0 = null; return; }
+    if (sheet.scrollTop > 0 || e.target.closest('textarea,input,pre')) { y0 = null; return; }
     y0 = e.touches[0].clientY; dy = 0; sheet.style.transition = 'none';
   }, { passive: true });
   sheet.addEventListener('touchmove', (e) => {
@@ -230,6 +250,7 @@ for (const sheet of [detail, settings]) {
 // ---------- 설정 ----------
 gear.addEventListener('click', async () => {
   $('s-key').value = (await db.getMeta('apiKey')) || '';
+  await renderRecentAsks();
   await renderModels();
   updateStatus(await db.all('ideas'));
   openSheet(settings);
@@ -336,3 +357,138 @@ navigator.storage?.persist?.().catch(() => {});
   else if (!(await db.getMeta('apiKey'))) gear.className = 'pending';
   kick();
 })();
+
+// ---------- 질문 ----------
+let lensActive = false;
+let askSeq = 0;
+const esc = (t) => String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const LOADING = '<div class="loading"><i></i><i></i><i></i></div>';
+
+async function runAsk(q) {
+  const seq = ++askSeq;
+  current = null;
+  map.select(null);
+  $('ask-q').textContent = '? ' + q;
+  $('ask-title').textContent = '';
+  $('ask-insight').innerHTML = LOADING;
+  $('ask-list').innerHTML = '';
+  lensActive = true;
+  map.lens(null);
+  openSheet(askSheet);
+  rememberAsk(q);
+  try {
+    const r = await ai.ask(q);
+    if (seq !== askSeq || !lensActive) return;
+    const [ideas, clusters] = await Promise.all([db.all('ideas'), db.all('clusters')]);
+    const byId = new Map(ideas.map((i) => [i.id, i]));
+    const colorOf = new Map(clusters.map((c) => [c.id, c.color]));
+    $('ask-title').textContent = r.title || q;
+    $('ask-insight').textContent = r.insight || '';
+    $('ask-list').innerHTML = r.picks.map((p) => {
+      const it = byId.get(p.id);
+      const color = clusterColor(colorOf.has(it.clusterId) ? colorOf.get(it.clusterId) : null);
+      const label = it.keyword || it.text.slice(0, 14) + '…';
+      return `<li data-id="${esc(p.id)}"><span class="dot" style="background:${color}"></span>
+        <span class="k">${esc(label)}</span><span class="s">${p.score}</span>
+        <span class="r">${esc(p.reason)}</span></li>`;
+    }).join('');
+    map.lens(new Map(r.picks.map((p) => [p.id, p.score])));
+    if (r.picks.length) map.fit(r.picks.map((p) => p.id));
+  } catch (e) {
+    if (seq !== askSeq) return;
+    $('ask-insight').textContent = ai.errorText(e);
+  }
+}
+
+$('ask-list').addEventListener('click', (e) => {
+  const li = e.target.closest('li[data-id]');
+  if (li) openDetail(li.dataset.id);
+});
+
+async function rememberAsk(q) {
+  const list = (await db.getMeta('recentAsks', [])).filter((x) => x !== q);
+  list.unshift(q);
+  await db.setMeta('recentAsks', list.slice(0, 8));
+}
+
+async function renderRecentAsks() {
+  const list = await db.getMeta('recentAsks', []);
+  const box = $('s-asks');
+  box.innerHTML = '';
+  for (const q of list) {
+    const b = document.createElement('button');
+    b.textContent = q;
+    b.onclick = () => { saveKey(); runAsk(q); };
+    box.appendChild(b);
+  }
+}
+
+// ---------- 상세: 합치기 · 개발 프롬프트 ----------
+let extraSeq = 0;
+function setExtra(html, which = null) {
+  $('d-extra').innerHTML = html ? `<div class="extra">${html}</div>` : '';
+  $('d-merge').classList.toggle('on', which === 'merge');
+  $('d-build').classList.toggle('on', which === 'build');
+  if (!html) extraSeq++;
+}
+
+$('d-merge').addEventListener('click', async () => {
+  if ($('d-merge').classList.contains('on')) return setExtra(null);
+  const id = current, seq = ++extraSeq;
+  setExtra(LOADING, 'merge');
+  try {
+    const r = await ai.merge(id);
+    if (seq !== extraSeq || current !== id) return;
+    const ideas = new Map((await db.all('ideas')).map((i) => [i.id, i]));
+    const used = r.used_ids.map((x) => ideas.get(x)?.keyword).filter(Boolean).join(' + ');
+    setExtra(`<div class="t">${esc(r.keyword)}</div><div class="p">${esc(r.pitch)}</div>
+      <div class="used">${esc(used)}</div>
+      <div class="bar"><button class="primary" id="x-save">기록</button></div>`, 'merge');
+    $('x-save').onclick = async () => {
+      const now = Date.now();
+      const nid = db.uid();
+      await db.put('ideas', { id: nid, text: `${r.keyword}\n${r.pitch}`, createdAt: now, updatedAt: now, links: r.used_ids, clusterId: null, status: 'pending' });
+      for (const x of r.used_ids) {
+        const o = await db.get('ideas', x);
+        if (o && !o.links?.includes(nid)) { o.links = [...(o.links || []), nid]; await db.put('ideas', o); }
+      }
+      toast('✓');
+      await refresh();
+      kick();
+      openDetail(nid);
+    };
+  } catch (e) {
+    if (seq === extraSeq) setExtra(`<div class="p">${esc(ai.errorText(e))}</div>`, 'merge');
+  }
+});
+
+$('d-build').addEventListener('click', async () => {
+  if ($('d-build').classList.contains('on')) return setExtra(null);
+  const id = current;
+  const it = await db.get('ideas', id);
+  if (!it) return;
+  const show = (text) => {
+    setExtra(`<pre id="x-prompt">${esc(text)}</pre>
+      <div class="bar"><button id="x-redo">다시</button><button class="primary" id="x-copy">복사</button></div>`, 'build');
+    $('x-copy').onclick = async () => {
+      try { await navigator.clipboard.writeText(text); toast('복사됨'); }
+      catch {
+        const r = document.createRange(); r.selectNodeContents($('x-prompt'));
+        const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+      }
+    };
+    $('x-redo').onclick = () => generate();
+  };
+  const generate = async () => {
+    const seq = ++extraSeq;
+    setExtra(LOADING, 'build');
+    try {
+      const text = await ai.buildPrompt(id);
+      if (seq === extraSeq && current === id) show(text);
+    } catch (e) {
+      if (seq === extraSeq) setExtra(`<div class="p">${esc(ai.errorText(e))}</div>`, 'build');
+    }
+  };
+  // 글이 그대로면 저장해 둔 프롬프트 재사용
+  if (it.buildPrompt && it.buildFor === it.text) show(it.buildPrompt); else generate();
+});

@@ -185,3 +185,53 @@ svg { display: block; }
   transition: opacity 0.2s, transform 0.2s;
 }
 #toast.on { opacity: 1; transform: translate(-50%, 0); }
+
+/* ---------- 질문 렌즈 ---------- */
+#map.lens .node:not(.picked) { opacity: 0.16; }
+#map.lens .link:not(.picked) { stroke-opacity: 0.25; }
+#map.lens .link.picked { stroke: rgba(220, 235, 255, 0.45); }
+#map.lens .cluster { opacity: 0.1; }
+#map.lens .node.picked .label { opacity: 1; font-weight: 600; }
+.node { transition: opacity 0.4s; }
+#input.ask { border-color: rgba(159, 208, 255, 0.55); }
+
+/* ---------- 질문 시트 ---------- */
+#ask-q { font-size: 12px; color: var(--dim); margin-bottom: 6px; }
+#ask-title { font-size: 18px; font-weight: 600; margin-bottom: 10px; }
+#ask-insight { font-size: 15px; line-height: 1.6; color: rgba(232, 236, 242, 0.88); word-break: keep-all; margin-bottom: 14px; -webkit-user-select: text; user-select: text; }
+#ask-list { list-style: none; margin: 0; padding: 0; }
+#ask-list li { display: grid; grid-template-columns: 10px 1fr auto; gap: 4px 12px; align-items: center; padding: 11px 0; border-top: 1px solid var(--stroke); cursor: pointer; }
+#ask-list li:active { background: rgba(255, 255, 255, 0.04); }
+#ask-list .dot { width: 7px; height: 7px; border-radius: 50%; }
+#ask-list .k { font-size: 15px; font-weight: 500; }
+#ask-list .s { font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+#ask-list .r { grid-column: 2 / 4; font-size: 13px; color: var(--dim); line-height: 1.45; word-break: keep-all; }
+.loading { display: flex; gap: 6px; padding: 18px 0; }
+.loading i { width: 5px; height: 5px; border-radius: 50%; background: var(--dim); animation: blink 1s ease-in-out infinite; }
+.loading i:nth-child(2) { animation-delay: 0.15s; }
+.loading i:nth-child(3) { animation-delay: 0.3s; }
+
+/* 최근 질문 */
+#s-asks { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 18px; }
+#s-asks:empty { display: none; }
+#s-asks button { padding: 7px 12px; border-radius: 999px; font-size: 13px; border: 1px solid var(--stroke); color: rgba(232, 236, 242, 0.8); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#s-asks-label:has(+ #s-asks:empty) { display: none; }
+
+/* ---------- 상세: 합치기 · 개발 프롬프트 ---------- */
+#d-extra { margin-top: 16px; }
+#d-extra:empty { display: none; }
+.extra { border-top: 1px solid var(--stroke); padding-top: 14px; }
+.extra .t { font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+.extra .p { font-size: 15px; line-height: 1.6; word-break: keep-all; -webkit-user-select: text; user-select: text; }
+.extra .used { margin-top: 8px; font-size: 12px; color: var(--dim); }
+.extra pre {
+  margin: 0; max-height: 38dvh; overflow: auto; white-space: pre-wrap; word-break: keep-all; overflow-wrap: anywhere;
+  font: inherit; font-size: 13.5px; line-height: 1.55; color: rgba(232, 236, 242, 0.9);
+  padding: 12px 14px; border-radius: 12px; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--stroke);
+  -webkit-user-select: text; user-select: text;
+}
+.extra .bar { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+.extra .bar button { height: 36px; padding: 0 14px; border-radius: 10px; font-size: 13px; background: rgba(255, 255, 255, 0.07); border: 1px solid var(--stroke); }
+.extra .bar button.primary { background: rgba(255, 255, 255, 0.9); color: #0b0c10; border-color: transparent; }
+.acts button.on { color: var(--fg); background: rgba(255, 255, 255, 0.08); }
+#s-asks-label { margin-bottom: 8px; }
