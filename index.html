@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#07080b">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Ideas">
+  <title>Ideas</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <svg id="map" aria-label="map"></svg>
+  <div id="empty"></div>
+
+  <button id="gear" aria-label="settings"><span></span></button>
+
+  <form id="dock" autocomplete="off">
+    <textarea id="input" rows="1" enterkeyhint="send" spellcheck="false" aria-label="idea"></textarea>
+    <button id="mic" type="button" aria-label="record">
+      <svg class="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
+      <svg class="i-send" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+    </button>
+  </form>
+
+  <div id="scrim"></div>
+
+  <section id="detail" class="sheet" aria-hidden="true">
+    <div class="grip"></div>
+    <div id="d-key"></div>
+    <div id="d-text"></div>
+    <textarea id="d-edit" hidden></textarea>
+    <div class="row">
+      <time id="d-date"></time>
+      <div class="acts">
+        <button id="d-editbtn" aria-label="edit">
+          <svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16v4zM13.5 6.5l4 4"/></svg>
+        </button>
+        <button id="d-save" aria-label="save" hidden>
+          <svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+        </button>
+        <button id="d-del" aria-label="delete">
+          <svg viewBox="0 0 24 24"><path d="M5 7h14M10 7V4.5h4V7M7 7l1 13h8l1-13"/></svg>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <section id="settings" class="sheet" aria-hidden="true">
+    <div class="grip"></div>
+    <label class="field">
+      <span>API key</span>
+      <input id="s-key" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false">
+    </label>
+    <div class="field">
+      <span>Model</span>
+      <div id="s-model" class="seg"></div>
+    </div>
+    <div class="btns">
+      <button id="s-recluster">다시 묶기</button>
+      <button id="s-export">내보내기</button>
+      <button id="s-import">불러오기</button>
+    </div>
+    <div id="s-status"></div>
+    <input id="s-file" type="file" accept="application/json,.json" hidden>
+  </section>
+
+  <div id="toast"></div>
+
+  <script src="vendor/d3.min.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
