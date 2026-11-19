@@ -198,6 +198,7 @@ function openSheet(el) {
   scrim.classList.add('on');
 }
 function closeSheets() {
+  if (settings.classList.contains('open')) saveKey();
   [detail, settings].forEach((s) => { s.classList.remove('open'); s.setAttribute('aria-hidden', 'true'); });
   scrim.classList.remove('on');
   document.activeElement?.blur?.();
@@ -234,12 +235,21 @@ gear.addEventListener('click', async () => {
   openSheet(settings);
 });
 
-$('s-key').addEventListener('change', async (e) => {
-  const v = e.target.value.trim();
+// 붙여넣기만 해도 저장 (iOS에서 change 이벤트가 안 오는 경우 대비)
+let keyTimer = null;
+async function saveKey() {
+  clearTimeout(keyTimer);
+  const v = $('s-key').value.trim();
+  const prev = (await db.getMeta('apiKey')) || '';
+  if (v === prev) return;
   await db.setMeta('apiKey', v || null);
   await db.setMeta('keyError', false);
+  updateStatus(await db.all('ideas'));
   if (v) { toast('✓'); kick(); }
-});
+}
+$('s-key').addEventListener('input', () => { clearTimeout(keyTimer); keyTimer = setTimeout(saveKey, 500); });
+$('s-key').addEventListener('change', saveKey);
+$('s-key').addEventListener('blur', saveKey);
 
 async function renderModels() {
   const cur = (await db.getMeta('model')) || ai.DEFAULT_MODEL;
@@ -262,6 +272,7 @@ async function updateStatus(ideas) {
   if (pending) parts.push(`대기 ${pending}`);
   if (failed) parts.push(`실패 ${failed}`);
   if (keyError) parts.push('키 오류');
+  if (!(await db.getMeta('apiKey'))) parts.push('키 없음');
   if (!navigator.onLine) parts.push('오프라인');
   $('s-status').textContent = parts.join('  ·  ');
 }
