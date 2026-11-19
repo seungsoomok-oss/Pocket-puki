@@ -250,7 +250,8 @@ for (const sheet of SHEETS) {
 // ---------- 설정 ----------
 gear.addEventListener('click', async () => {
   $('s-key').value = (await db.getMeta('apiKey')) || '';
-  await renderRecentAsks();
+  await renderHistory();
+  await renderUsage();
   await renderModels();
   updateStatus(await db.all('ideas'));
   openSheet(settings);
@@ -364,40 +365,73 @@ let askSeq = 0;
 const esc = (t) => String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const LOADING = '<div class="loading"><i></i><i></i><i></i></div>';
 
-async function runAsk(q) {
-  const seq = ++askSeq;
+const fmtTok = (n) => (n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n));
+const KRW = 1400; // 대략 환율
+const fmtCost = (usd) => {
+  const w = usd * KRW;
+  return w < 1 ? '₩1 미만' : '₩' + (w < 100 ? w.toFixed(1) : Math.round(w).toLocaleString());
+};
+const usageText = (u) => (u ? `입력 ${fmtTok(u.in)} · 출력 ${fmtTok(u.out)} 토큰 · ${fmtCost(u.cost)}` : '');
+
+function askLoading(q) {
   current = null;
   map.select(null);
   $('ask-q').textContent = '? ' + q;
   $('ask-title').textContent = '';
   $('ask-insight').innerHTML = LOADING;
   $('ask-list').innerHTML = '';
+  $('ask-foot').innerHTML = '';
   lensActive = true;
   map.lens(null);
   openSheet(askSheet);
-  rememberAsk(q);
+}
+
+async function runAsk(q) {
+  const seq = ++askSeq;
+  askLoading(q);
   try {
-    const r = await ai.ask(q);
+    const entry = await ai.ask(q);
     if (seq !== askSeq || !lensActive) return;
-    const [ideas, clusters] = await Promise.all([db.all('ideas'), db.all('clusters')]);
-    const byId = new Map(ideas.map((i) => [i.id, i]));
-    const colorOf = new Map(clusters.map((c) => [c.id, c.color]));
-    $('ask-title').textContent = r.title || q;
-    $('ask-insight').textContent = r.insight || '';
-    $('ask-list').innerHTML = r.picks.map((p) => {
-      const it = byId.get(p.id);
-      const color = clusterColor(colorOf.has(it.clusterId) ? colorOf.get(it.clusterId) : null);
-      const label = it.keyword || it.text.slice(0, 14) + '…';
-      return `<li data-id="${esc(p.id)}"><span class="dot" style="background:${color}"></span>
-        <span class="k">${esc(label)}</span><span class="s">${p.score}</span>
-        <span class="r">${esc(p.reason)}</span></li>`;
-    }).join('');
-    map.lens(new Map(r.picks.map((p) => [p.id, p.score])));
-    if (r.picks.length) map.fit(r.picks.map((p) => p.id));
+    await showAsk(entry, { keepOpen: true });
   } catch (e) {
     if (seq !== askSeq) return;
     $('ask-insight').textContent = ai.errorText(e);
+    $('ask-foot').innerHTML = `<div class="bar"><button id="ask-redo">다시</button></div>`;
+    $('ask-redo').onclick = () => runAsk(q);
   }
+}
+
+// 저장된 질문 결과 보여주기 (API 호출 없음)
+async function showAsk(entry, { keepOpen = false } = {}) {
+  if (!keepOpen) { ++askSeq; askLoading(entry.q); }
+  const [ideas, clusters] = await Promise.all([db.all('ideas'), db.all('clusters')]);
+  const byId = new Map(ideas.map((i) => [i.id, i]));
+  const colorOf = new Map(clusters.map((c) => [c.id, c.color]));
+  const picks = (entry.picks || []).filter((p) => byId.has(p.id)); // 지운 아이디어 제외
+  $('ask-q').textContent = '? ' + entry.q;
+  $('ask-title').textContent = entry.title || entry.q;
+  $('ask-insight').textContent = entry.insight || '';
+  $('ask-list').innerHTML = picks.map((p) => {
+    const it = byId.get(p.id);
+    const color = clusterColor(colorOf.has(it.clusterId) ? colorOf.get(it.clusterId) : null);
+    const label = it.keyword || it.text.slice(0, 14) + '…';
+    return `<li data-id="${esc(p.id)}"><span class="dot" style="background:${color}"></span>
+      <span class="k">${esc(label)}</span><span class="s">${p.score}</span>
+      <span class="r">${esc(p.reason)}</span></li>`;
+  }).join('');
+  const newer = ideas.length - (entry.ideaCount ?? ideas.length);
+  $('ask-foot').innerHTML = `
+    <div class="meta">${fmt.format(new Date(entry.at))}${entry.usage ? '<br>' + usageText(entry.usage) : ''}${newer > 0 ? `<br>이후 새 아이디어 ${newer}개` : ''}</div>
+    <div class="bar"><button id="ask-del">삭제</button><button class="primary" id="ask-redo">다시 묻기</button></div>`;
+  $('ask-redo').onclick = () => runAsk(entry.q);
+  $('ask-del').onclick = async (ev) => {
+    const b = ev.currentTarget;
+    if (!b.classList.contains('armed')) { b.classList.add('armed'); b.textContent = '삭제?'; return; }
+    if (entry.id) await db.del('asks', entry.id);
+    closeSheets();
+  };
+  map.lens(new Map(picks.map((p) => [p.id, p.score])));
+  if (picks.length) map.fit(picks.map((p) => p.id));
 }
 
 $('ask-list').addEventListener('click', (e) => {
@@ -405,22 +439,39 @@ $('ask-list').addEventListener('click', (e) => {
   if (li) openDetail(li.dataset.id);
 });
 
-async function rememberAsk(q) {
-  const list = (await db.getMeta('recentAsks', [])).filter((x) => x !== q);
-  list.unshift(q);
-  await db.setMeta('recentAsks', list.slice(0, 8));
-}
-
-async function renderRecentAsks() {
-  const list = await db.getMeta('recentAsks', []);
-  const box = $('s-asks');
+// 설정: 질문 내역 + 사용량
+async function renderHistory() {
+  const asks = (await db.all('asks')).sort((a, b) => b.at - a.at);
+  // 예전 버전의 "최근 질문"(결과 없이 질문만 남은 것)
+  const legacy = (await db.getMeta('recentAsks', [])).filter((q) => !asks.some((a) => a.q === q));
+  const box = $('s-hist');
   box.innerHTML = '';
-  for (const q of list) {
+  for (const a of asks.slice(0, 30)) {
     const b = document.createElement('button');
-    b.textContent = q;
+    b.innerHTML = `<span class="hq">${esc(a.title || a.q)}</span><span class="hd">${fmt.format(new Date(a.at)).slice(3)} · ${(a.picks || []).length}</span>`;
+    b.onclick = () => { saveKey(); showAsk(a); };
+    box.appendChild(b);
+  }
+  for (const q of legacy) {
+    const b = document.createElement('button');
+    b.innerHTML = `<span class="hq">${esc(q)}</span><span class="hd">↻</span>`;
     b.onclick = () => { saveKey(); runAsk(q); };
     box.appendChild(b);
   }
+  $('s-hist-label').hidden = !box.children.length;
+}
+
+async function renderUsage() {
+  const u = await ai.getUsage();
+  const rows = Object.entries(ai.KINDS).filter(([k]) => u.kinds[k]);
+  const tot = rows.reduce((t, [k]) => ({ n: t.n + u.kinds[k].n, in: t.in + u.kinds[k].in, out: t.out + u.kinds[k].out, cost: t.cost + u.kinds[k].cost }), { n: 0, in: 0, out: 0, cost: 0 });
+  const since = new Date(u.since);
+  $('s-usage-label').querySelector('span').textContent = `사용량 · ${since.getMonth() + 1}.${since.getDate()}부터`;
+  $('s-usage').innerHTML = rows.length ? rows.map(([k, name]) => {
+    const r = u.kinds[k];
+    return `<div class="ur"><span>${name}</span><span>${r.n}회</span><span>${fmtTok(r.in + r.out)}</span><span>${fmtCost(r.cost)}</span></div>`;
+  }).join('') + `<div class="ur tot"><span>합계</span><span>${tot.n}회</span><span>${fmtTok(tot.in + tot.out)}</span><span>${fmtCost(tot.cost)}</span></div><div class="usd">$${tot.cost.toFixed(3)} · 1달러≈${KRW}원</div>`
+    : '<div class="ur"><span>아직 없음</span></div>';
 }
 
 // ---------- 상세: 합치기 · 개발 프롬프트 ----------

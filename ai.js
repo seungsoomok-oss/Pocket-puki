@@ -14,7 +14,7 @@ export class ApiError extends Error {
   constructor(msg, status) { super(msg); this.status = status; }
 }
 
-async function callClaude({ system, user, schema, maxTokens, effort = 'low' }) {
+async function callClaude({ system, user, schema, maxTokens, effort = 'low', kind = 'other' }) {
   const apiKey = await db.getMeta('apiKey');
   if (!apiKey) throw new ApiError('no key', 0);
   const model = (await db.getMeta('model')) || DEFAULT_MODEL;
@@ -50,11 +50,40 @@ async function callClaude({ system, user, schema, maxTokens, effort = 'low' }) {
     throw new ApiError(msg, res.status);
   }
   const data = await res.json();
+  const usage = await recordUsage(kind, data.model || model, data.usage);
   if (data.stop_reason === 'refusal') throw new ApiError('refusal', 200);
   if (data.stop_reason === 'max_tokens') throw new ApiError('truncated', 200);
   const text = (data.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
-  return JSON.parse(text);
+  const out = JSON.parse(text);
+  Object.defineProperty(out, '_usage', { value: usage, enumerable: false });
+  return out;
 }
+
+// ---------- 토큰 사용량 ----------
+// 1M 토큰당 달러 (입력, 출력)
+const PRICES = {
+  'claude-opus-5-5': [4, 20],
+  'claude-sonnet-5-5': [2, 10],
+  'claude-haiku-5-5': [0.1, 0.5],
+};
+const priceOf = (m) => PRICES[m] || PRICES[Object.keys(PRICES).find((k) => m?.startsWith(k))] || PRICES[DEFAULT_MODEL];
+export const KINDS = { process: '기록 처리', recluster: '다시 묶기', ask: '질문', merge: '합치기', build: '개발 프롬프트' };
+
+async function recordUsage(kind, model, u) {
+  if (!u) return null;
+  const inTok = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
+  const outTok = u.output_tokens || 0;
+  const [pi, po] = priceOf(model);
+  const cost = (inTok * pi + outTok * po) / 1e6;
+  const t = await db.getMeta('usage', { since: Date.now(), kinds: {} });
+  const k = (t.kinds[kind] ||= { n: 0, in: 0, out: 0, cost: 0 });
+  k.n++; k.in += inTok; k.out += outTok; k.cost += cost;
+  await db.setMeta('usage', t);
+  return { in: inTok, out: outTok, cost, model };
+}
+
+export const getUsage = () => db.getMeta('usage', { since: Date.now(), kinds: {} });
+export const resetUsage = () => db.setMeta('usage', { since: Date.now(), kinds: {} });
 
 // ---------- 프롬프트 ----------
 
@@ -143,7 +172,7 @@ async function processIdea(idea) {
     idea.text,
   ].join('\n');
 
-  const r = await callClaude({ system: PROCESS_SYSTEM, user, schema: PROCESS_SCHEMA, maxTokens: 4000 });
+  const r = await callClaude({ system: PROCESS_SYSTEM, user, schema: PROCESS_SCHEMA, maxTokens: 4000, kind: 'process' });
 
   const ids = new Set(ideas.map((i) => i.id));
   const related = [...new Set((r.related_ids || []).filter((x) => ids.has(x)))].slice(0, 4);
@@ -188,7 +217,7 @@ export async function recluster() {
   const ideas = (await db.all('ideas')).filter((i) => i.status === 'done');
   if (ideas.length < 2) return;
   const user = ideas.map((i) => `${i.id} | ${line(i.keyword)} | ${line(i.summary)}`).join('\n');
-  const r = await callClaude({ system: RECLUSTER_SYSTEM, user, schema: RECLUSTER_SCHEMA, maxTokens: 16000 });
+  const r = await callClaude({ system: RECLUSTER_SYSTEM, user, schema: RECLUSTER_SCHEMA, maxTokens: 16000, kind: 'recluster' });
 
   const ids = new Set(ideas.map((i) => i.id));
   const old = await db.all('clusters');
@@ -339,16 +368,19 @@ const ASK_SCHEMA = {
 
 export async function ask(query) {
   const ideas = (await db.all('ideas')).sort((a, b) => a.createdAt - b.createdAt);
-  if (!ideas.length) return { title: query, insight: '', picks: [] };
+  if (!ideas.length) return { title: query, insight: '', picks: [], q: query, at: Date.now() };
   const user = `## 기준\n${query}\n\n## 아이디어 목록\n${ideas.map(ideaBlock).join('\n\n')}`;
-  const r = await callClaude({ system: ASK_SYSTEM, user, schema: ASK_SCHEMA, maxTokens: 8000, effort: 'medium' });
+  const r = await callClaude({ system: ASK_SYSTEM, user, schema: ASK_SCHEMA, maxTokens: 8000, effort: 'medium', kind: 'ask' });
   const ids = new Set(ideas.map((i) => i.id));
   const seen = new Set();
   r.picks = (r.picks || [])
     .filter((p) => ids.has(p.id) && !seen.has(p.id) && seen.add(p.id))
     .map((p) => ({ ...p, score: Math.max(1, Math.min(10, p.score | 0)) }))
     .sort((a, b) => b.score - a.score);
-  return r;
+  // 질문 내역에 결과까지 저장
+  const entry = { id: db.uid(), q: query, at: Date.now(), title: r.title, insight: r.insight, picks: r.picks, usage: r._usage, ideaCount: ideas.length };
+  await db.put('asks', entry);
+  return entry;
 }
 
 const MERGE_SYSTEM = `너는 아이디어를 엮어 더 강한 제품을 찾아주는 제품 기획자다.
@@ -375,7 +407,7 @@ export async function merge(id) {
   if (!base) throw new Error('missing');
   const others = (await Promise.all((base.links || []).map((x) => db.get('ideas', x)))).filter(Boolean);
   const user = `## 기준 아이디어\n${ideaBlock(base)}\n\n## 연결된 아이디어\n${others.map(ideaBlock).join('\n\n')}`;
-  const r = await callClaude({ system: MERGE_SYSTEM, user, schema: MERGE_SCHEMA, maxTokens: 4000, effort: 'medium' });
+  const r = await callClaude({ system: MERGE_SYSTEM, user, schema: MERGE_SCHEMA, maxTokens: 4000, effort: 'medium', kind: 'merge' });
   const ok = new Set([base.id, ...others.map((o) => o.id)]);
   r.used_ids = [...new Set([base.id, ...(r.used_ids || []).filter((x) => ok.has(x))])];
   r.keyword = line(r.keyword);
@@ -410,7 +442,7 @@ export async function buildPrompt(id) {
   const linked = (await Promise.all((it.links || []).map((x) => db.get('ideas', x)))).filter(Boolean);
   const ctx = linked.length ? `\n\n## 참고: 연결된 아이디어(필요할 때만 반영)\n${linked.map((l) => `- ${line(l.keyword)}: ${line(l.summary)}`).join('\n')}` : '';
   const user = `## 아이디어\n${it.text.trim()}${ctx}`;
-  const r = await callClaude({ system: BUILD_SYSTEM, user, schema: BUILD_SCHEMA, maxTokens: 8000, effort: 'medium' });
+  const r = await callClaude({ system: BUILD_SYSTEM, user, schema: BUILD_SCHEMA, maxTokens: 8000, effort: 'medium', kind: 'build' });
   const fresh = await db.get('ideas', id);
   if (fresh) { fresh.buildPrompt = r.prompt; fresh.buildFor = fresh.text; await db.put('ideas', fresh); }
   return r.prompt;

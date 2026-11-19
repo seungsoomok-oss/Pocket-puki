@@ -1,6 +1,6 @@
 // IndexedDB 저장소: ideas, clusters, meta(key-value)
 const DB_NAME = 'idea-map';
-const DB_VER = 1;
+const DB_VER = 2;
 let dbp = null;
 
 function open() {
@@ -12,6 +12,7 @@ function open() {
       if (!db.objectStoreNames.contains('ideas')) db.createObjectStore('ideas', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('clusters')) db.createObjectStore('clusters', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta');
+      if (!db.objectStoreNames.contains('asks')) db.createObjectStore('asks', { keyPath: 'id' });
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -76,6 +77,7 @@ export async function exportAll() {
     exportedAt: new Date().toISOString(),
     ideas: await all('ideas'),
     clusters: await all('clusters'),
+    asks: await all('asks'),
   };
 }
 
@@ -83,6 +85,7 @@ export async function exportAll() {
 export async function importAll(data) {
   if (!data || !Array.isArray(data.ideas)) throw new Error('bad file');
   for (const c of data.clusters || []) if (c?.id) await put('clusters', c);
+  for (const a of data.asks || []) if (a?.id && a.q) await put('asks', a);
   for (const i of data.ideas) {
     if (!i?.id || typeof i.text !== 'string') continue;
     await put('ideas', {
