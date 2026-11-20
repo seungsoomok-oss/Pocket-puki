@@ -549,13 +549,34 @@ $('d-build').addEventListener('click', async () => {
 });
 
 // ---------- 떠다니는 영감(+) ----------
+// 무작위 아이디어 하나 옆에 떠서 그 노드를 따라다님. 누르면 그 아이디어와 주변을 엮음
 const sparkBtn = $('spark');
-let sparkTimer = null, sparkHide = null, sparking = false;
+let sparkTimer = null, sparkHide = null, sparking = false, sparkAnchor = null, sparkRaf = 0;
 const rand = (a, b) => a + Math.random() * (b - a);
+const OFFSET = { x: 22, y: -20 };
 
 function scheduleSpark(ms) {
   clearTimeout(sparkTimer);
   sparkTimer = setTimeout(showSpark, ms);
+}
+
+// 화면 안(위 상태줄·아래 입력창 피해서)에 보이는 노드만 후보
+function visibleAnchors(ideas) {
+  const top = window.innerHeight * 0.12, bottom = window.innerHeight * 0.72;
+  return ideas.filter((i) => {
+    if (i.status !== 'done') return false;
+    const p = map.screenPos(i.id);
+    return p && p.x > 40 && p.x < window.innerWidth - 70 && p.y > top && p.y < bottom;
+  });
+}
+
+function followAnchor() {
+  const p = sparkAnchor && map.screenPos(sparkAnchor);
+  if (p) {
+    sparkBtn.style.left = p.x + OFFSET.x + 'px';
+    sparkBtn.style.top = p.y + OFFSET.y + 'px';
+  }
+  if (sparkBtn.classList.contains('show')) sparkRaf = requestAnimationFrame(followAnchor);
 }
 
 async function showSpark() {
@@ -564,9 +585,13 @@ async function showSpark() {
   if (document.hidden || !navigator.onLine || busySheet || !(await db.getMeta('apiKey')) || !ai.canSpark(ideas)) {
     return scheduleSpark(60000);
   }
-  sparkBtn.style.left = rand(0.18, 0.82) * window.innerWidth + 'px';
-  sparkBtn.style.top = rand(0.2, 0.6) * window.innerHeight + 'px';
+  const cands = visibleAnchors(ideas);
+  if (!cands.length) return scheduleSpark(60000);
+  sparkAnchor = cands[Math.floor(Math.random() * cands.length)].id;
+  map.mark(sparkAnchor);
   sparkBtn.classList.add('show');
+  cancelAnimationFrame(sparkRaf);
+  followAnchor();
   clearTimeout(sparkHide);
   sparkHide = setTimeout(hideSpark, 30000);
 }
@@ -574,6 +599,9 @@ async function showSpark() {
 function hideSpark() {
   if (sparking) return;
   sparkBtn.classList.remove('show');
+  cancelAnimationFrame(sparkRaf);
+  map.mark(null);
+  sparkAnchor = null;
   scheduleSpark(rand(120000, 300000)); // 2~5분 뒤 다시
 }
 
@@ -584,7 +612,7 @@ sparkBtn.addEventListener('click', async () => {
   sparkBtn.classList.add('busy');
   if (navigator.vibrate) navigator.vibrate(12);
   try {
-    const idea = await ai.spark();
+    const idea = await ai.spark(sparkAnchor);
     await refresh();
     kick();
     setTimeout(() => openDetail(idea.id), 500);

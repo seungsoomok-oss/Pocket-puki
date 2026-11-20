@@ -194,5 +194,15 @@ export function createMap(svgEl, { onTap }) {
       d3.zoomIdentity.translate(W / 2 - ((x0 + x1) / 2) * k, viewH / 2 + 30 - ((y0 + y1) / 2) * k).scale(k));
   }
 
-  return { update, focus, select, lens, fit };
+  // 노드의 현재 화면 좌표 (확대·이동 반영)
+  function screenPos(id) {
+    const n = nodeById.get(id);
+    if (!n || n.x == null) return null;
+    const [x, y] = d3.zoomTransform(svgEl).apply([n.x, n.y]);
+    const r = svgEl.getBoundingClientRect();
+    return { x: x + r.left, y: y + r.top };
+  }
+  function mark(id) { nodeSel.classed('anchor', (d) => d.id === id); }
+
+  return { update, focus, select, lens, fit, screenPos, mark };
 }

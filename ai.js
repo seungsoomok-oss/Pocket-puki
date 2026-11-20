@@ -502,23 +502,36 @@ const SPARK_SCHEMA = {
 
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
-// 씨앗 고르기: 무작위 하나 + 연결된 것 하나 + (가끔) 다른 묶음의 것 하나
-function pickSeeds(ideas) {
+// 씨앗 고르기: 기준 아이디어 + 그 주변(연결 → 연결의 연결 → 같은 묶음) 1~2개
+// 가끔(25%) 먼 묶음의 아이디어 하나를 섞어 의외성을 줌
+function pickSeeds(ideas, anchorId) {
   const done = ideas.filter((i) => i.status === 'done');
   if (done.length < 2) return [];
-  const a = pick(done);
+  const byId = new Map(done.map((i) => [i.id, i]));
+  const a = byId.get(anchorId) || pick(done);
   const seeds = [a];
-  const linked = done.filter((i) => a.links?.includes(i.id));
-  const b = linked.length && Math.random() < 0.7 ? pick(linked) : pick(done.filter((i) => i.id !== a.id));
-  seeds.push(b);
-  const far = done.filter((i) => !seeds.includes(i) && i.clusterId !== a.clusterId);
-  if (far.length && Math.random() < 0.5) seeds.push(pick(far));
+  const take = (pool) => {
+    const c = pool.filter((i) => i && !seeds.includes(i));
+    if (!c.length) return false;
+    seeds.push(pick(c));
+    return true;
+  };
+  const linked = (a.links || []).map((x) => byId.get(x));
+  const second = linked.flatMap((l) => (l?.links || []).map((x) => byId.get(x)));
+  const sameCluster = done.filter((i) => a.clusterId && i.clusterId === a.clusterId);
+  const near = [linked, second, sameCluster];
+  // 주변에서 하나는 꼭
+  near.some(take) || take(done);
+  // 하나 더: 대부분 주변, 가끔 먼 곳
+  const far = done.filter((i) => i.clusterId !== a.clusterId);
+  if (Math.random() < 0.25 && far.length) take(far);
+  else if (Math.random() < 0.6) near.some(take);
   return seeds;
 }
 
-export async function spark() {
+export async function spark(anchorId) {
   const ideas = await db.all('ideas');
-  const seeds = pickSeeds(ideas);
+  const seeds = pickSeeds(ideas, anchorId);
   if (!seeds.length) throw new Error('not enough');
   const twist = pick(TWISTS);
   const user = `## 씨앗 아이디어\n${seeds.map(ideaBlock).join('\n\n')}\n\n## 이번 각도\n${twist}`;

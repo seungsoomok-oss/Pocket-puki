@@ -277,3 +277,10 @@ svg { display: block; }
 
 #d-note { margin-top: 10px; font-size: 12.5px; line-height: 1.5; color: rgba(190, 220, 255, 0.75); word-break: keep-all; }
 .seg + .hint { margin-top: 8px; font-size: 11px; color: var(--dim); }
+
+.node.anchor .label { opacity: 1; }
+.node.anchor .dot { filter: drop-shadow(0 0 6px rgba(200, 225, 255, 0.9)); }
+/* 영감 기준 노드: 맥박처럼 커졌다 작아짐, + 는 덜 흔들리게 */
+.node.anchor .dot { transform-box: fill-box; transform-origin: center; animation: anchorPulse 1.8s ease-in-out infinite; }
+@keyframes anchorPulse { 50% { transform: scale(1.9); } }
+@keyframes float { 0%, 100% { translate: 0 0; } 50% { translate: 3px -4px; } }
