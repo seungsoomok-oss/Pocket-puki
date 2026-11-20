@@ -97,7 +97,7 @@ export function createMap(svgEl, { onTap }) {
       n.clusterId = i.clusterId || null;
       n.color = clusterColor(colorOf.has(i.clusterId) ? colorOf.get(i.clusterId) : null);
       n.status = i.status;
-      n.label = i.status === 'done' && i.keyword ? i.keyword : i.text.replace(/\s+/g, ' ').slice(0, 8) + '…';
+      n.label = (i.origin === 'ai' ? '✦ ' : '') + (i.status === 'done' && i.keyword ? i.keyword : i.text.replace(/\s+/g, ' ').slice(0, 8) + '…');
       n.degree = 0;
       return n;
     });

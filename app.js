@@ -157,6 +157,8 @@ function fillDetail(it, clusters) {
   if ($('d-edit').hidden) $('d-text').textContent = it.text;
   $('d-date').textContent = fmt.format(new Date(it.createdAt));
   $('d-merge').hidden = !(it.links && it.links.length);
+  $('d-note').hidden = !it.aiNote;
+  $('d-note').textContent = it.aiNote ? '✦ ' + it.aiNote : '';
 }
 
 function setEditing(on) {
@@ -353,7 +355,9 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catc
 navigator.storage?.persist?.().catch(() => {});
 
 (async () => {
+  if (!(await db.getMeta('modelV2'))) { await db.setMeta('model', ai.DEFAULT_MODEL); await db.setMeta('modelV2', true); }
   await refresh();
+  scheduleSpark(15000 + Math.random() * 20000);
   if (await db.getMeta('keyError')) gear.className = 'error';
   else if (!(await db.getMeta('apiKey'))) gear.className = 'pending';
   kick();
@@ -498,7 +502,7 @@ $('d-merge').addEventListener('click', async () => {
     $('x-save').onclick = async () => {
       const now = Date.now();
       const nid = db.uid();
-      await db.put('ideas', { id: nid, text: `${r.keyword}\n${r.pitch}`, createdAt: now, updatedAt: now, links: r.used_ids, clusterId: null, status: 'pending' });
+      await db.put('ideas', { id: nid, text: `${r.keyword}\n${r.pitch}`, createdAt: now, updatedAt: now, links: r.used_ids, seeds: r.used_ids, clusterId: null, status: 'pending', origin: 'ai', aiNote: `합치기 · ${used}` });
       for (const x of r.used_ids) {
         const o = await db.get('ideas', x);
         if (o && !o.links?.includes(nid)) { o.links = [...(o.links || []), nid]; await db.put('ideas', o); }
@@ -542,4 +546,53 @@ $('d-build').addEventListener('click', async () => {
   };
   // 글이 그대로면 저장해 둔 프롬프트 재사용
   if (it.buildPrompt && it.buildFor === it.text) show(it.buildPrompt); else generate();
+});
+
+// ---------- 떠다니는 영감(+) ----------
+const sparkBtn = $('spark');
+let sparkTimer = null, sparkHide = null, sparking = false;
+const rand = (a, b) => a + Math.random() * (b - a);
+
+function scheduleSpark(ms) {
+  clearTimeout(sparkTimer);
+  sparkTimer = setTimeout(showSpark, ms);
+}
+
+async function showSpark() {
+  const ideas = await db.all('ideas');
+  const busySheet = SHEETS.some((s) => s.classList.contains('open'));
+  if (document.hidden || !navigator.onLine || busySheet || !(await db.getMeta('apiKey')) || !ai.canSpark(ideas)) {
+    return scheduleSpark(60000);
+  }
+  sparkBtn.style.left = rand(0.18, 0.82) * window.innerWidth + 'px';
+  sparkBtn.style.top = rand(0.2, 0.6) * window.innerHeight + 'px';
+  sparkBtn.classList.add('show');
+  clearTimeout(sparkHide);
+  sparkHide = setTimeout(hideSpark, 30000);
+}
+
+function hideSpark() {
+  if (sparking) return;
+  sparkBtn.classList.remove('show');
+  scheduleSpark(rand(120000, 300000)); // 2~5분 뒤 다시
+}
+
+sparkBtn.addEventListener('click', async () => {
+  if (sparking) return;
+  sparking = true;
+  clearTimeout(sparkHide);
+  sparkBtn.classList.add('busy');
+  if (navigator.vibrate) navigator.vibrate(12);
+  try {
+    const idea = await ai.spark();
+    await refresh();
+    kick();
+    setTimeout(() => openDetail(idea.id), 500);
+  } catch (e) {
+    toast(ai.errorText(e));
+  } finally {
+    sparking = false;
+    sparkBtn.classList.remove('busy');
+    hideSpark();
+  }
 });

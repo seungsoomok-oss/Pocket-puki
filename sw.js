@@ -1,5 +1,5 @@
 // 앱 셸 캐시: 오프라인에서도 열림. Claude API 요청은 건드리지 않음.
-const CACHE = 'idea-map-v4';
+const CACHE = 'idea-map-v5';
 const SHELL = [
   './', 'index.html', 'style.css', 'app.js', 'map.js', 'db.js', 'ai.js',
   'vendor/d3.min.js', 'manifest.webmanifest',

@@ -3,21 +3,22 @@ import * as db from './db.js';
 
 const API_URL = 'https://api.anthropic.com/v1/messages';
 export const MODELS = [
-  { id: 'claude-opus-5-5', label: 'Opus 5.5' },
-  { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5' },
-  { id: 'claude-haiku-5-5', label: 'Haiku 5.5' },
+  { id: 'claude-haiku-5-5', label: '기본' },
+  { id: 'claude-sonnet-5-5', label: '중급' },
+  { id: 'claude-opus-5-5', label: '고급' },
 ];
-export const DEFAULT_MODEL = 'claude-opus-5-5';
+export const DEFAULT_MODEL = 'claude-haiku-5-5';
+export const BUILD_MODEL = 'claude-opus-5-5'; // 개발 프롬프트는 항상 고급
 const RECLUSTER_EVERY = 5; // 새 아이디어 5개마다 묶음 재정리
 
 export class ApiError extends Error {
   constructor(msg, status) { super(msg); this.status = status; }
 }
 
-async function callClaude({ system, user, schema, maxTokens, effort = 'low', kind = 'other' }) {
+async function callClaude({ system, user, schema, maxTokens, effort = 'low', kind = 'other', model: forced }) {
   const apiKey = await db.getMeta('apiKey');
   if (!apiKey) throw new ApiError('no key', 0);
-  const model = (await db.getMeta('model')) || DEFAULT_MODEL;
+  const model = forced || (await db.getMeta('model')) || DEFAULT_MODEL;
 
   const headers = {
     'content-type': 'application/json',
@@ -67,7 +68,7 @@ const PRICES = {
   'claude-haiku-5-5': [0.1, 0.5],
 };
 const priceOf = (m) => PRICES[m] || PRICES[Object.keys(PRICES).find((k) => m?.startsWith(k))] || PRICES[DEFAULT_MODEL];
-export const KINDS = { process: '기록 처리', recluster: '다시 묶기', ask: '질문', merge: '합치기', build: '개발 프롬프트' };
+export const KINDS = { process: '기록 처리', recluster: '다시 묶기', ask: '질문', merge: '합치기', spark: 'AI 영감', build: '개발 프롬프트' };
 
 async function recordUsage(kind, model, u) {
   if (!u) return null;
@@ -175,7 +176,7 @@ async function processIdea(idea) {
   const r = await callClaude({ system: PROCESS_SYSTEM, user, schema: PROCESS_SCHEMA, maxTokens: 4000, kind: 'process' });
 
   const ids = new Set(ideas.map((i) => i.id));
-  const related = [...new Set((r.related_ids || []).filter((x) => ids.has(x)))].slice(0, 4);
+  let related = [...new Set((r.related_ids || []).filter((x) => ids.has(x)))].slice(0, 4);
 
   let clusterId = clusters.some((c) => c.id === r.cluster_id) ? r.cluster_id : null;
   if (!clusterId) {
@@ -192,6 +193,8 @@ async function processIdea(idea) {
   const fresh = await db.get('ideas', idea.id);
   if (!fresh) return; // 처리 중 삭제됨
   const oldLinks = fresh.links || [];
+  // AI 영감·합치기로 생긴 아이디어는 출처 연결을 유지
+  if (fresh.seeds?.length) related = [...new Set([...related, ...fresh.seeds.filter((x) => ids.has(x))])];
   fresh.keyword = line(r.keyword).slice(0, 24);
   fresh.summary = line(r.summary);
   fresh.links = related;
@@ -442,7 +445,7 @@ export async function buildPrompt(id) {
   const linked = (await Promise.all((it.links || []).map((x) => db.get('ideas', x)))).filter(Boolean);
   const ctx = linked.length ? `\n\n## 참고: 연결된 아이디어(필요할 때만 반영)\n${linked.map((l) => `- ${line(l.keyword)}: ${line(l.summary)}`).join('\n')}` : '';
   const user = `## 아이디어\n${it.text.trim()}${ctx}`;
-  const r = await callClaude({ system: BUILD_SYSTEM, user, schema: BUILD_SCHEMA, maxTokens: 8000, effort: 'medium', kind: 'build' });
+  const r = await callClaude({ system: BUILD_SYSTEM, user, schema: BUILD_SCHEMA, maxTokens: 8000, effort: 'medium', kind: 'build', model: BUILD_MODEL });
   const fresh = await db.get('ideas', id);
   if (fresh) { fresh.buildPrompt = r.prompt; fresh.buildFor = fresh.text; await db.put('ideas', fresh); }
   return r.prompt;
@@ -456,3 +459,91 @@ export function errorText(e) {
   if (e.status === 429) return '잠시 후';
   return '✕';
 }
+
+// ---------- AI 영감: 내 아이디어들을 엮어 새 아이디어 ----------
+
+// 매번 다른 각도를 하나 골라 결합
+const TWISTS = [
+  '전혀 다른 사용자층(예: 부모, 시니어, 학생, 자영업자, 반려인)에게 옮겨보기',
+  '개인용을 팀·회사용(B2B)으로 바꿔보기',
+  '반대로 뒤집기: 기록 대신 줄여주기, 알려주는 대신 물어보기처럼',
+  '하루 만에 만들 수 있는 아주 작은 한 기능짜리 버전으로 줄이기',
+  '사람 대신 AI 에이전트가 알아서 대신 해주는 형태로 바꾸기',
+  '혼자 쓰던 것을 친구·커뮤니티와 함께 쓰는 소셜 형태로 바꾸기',
+  '모이는 데이터를 전혀 다른 용도로 다시 쓰기',
+  '오프라인 장소·물건·이벤트와 결합하기',
+  '돈을 버는 방식부터 정하고 거꾸로 설계하기 (구독, 건당 결제, 중개 수수료 등)',
+  '게임처럼 만들기: 점수, 연속 기록, 수집 요소',
+  '음성·카메라·위치 같은 휴대폰 센서를 핵심으로 쓰기',
+  '귀찮은 반복 작업 하나를 완전히 자동화하는 데만 집중하기',
+];
+
+const SPARK_SYSTEM = `너는 한 사람의 아이디어 노트에서 영감을 받아 새 아이디어를 떠올리는 공동 창업자다.
+메모는 바이브 코딩(AI로 빠르게 혼자 만드는 방식)으로 만들 서비스나 상품 아이디어다.
+씨앗 아이디어 2~3개와 이번에 적용할 각도 하나를 받는다. 씨앗들을 엮고 각도를 적용해, 기존 메모에 없는 새롭거나 한 단계 업그레이드된 아이디어 하나를 JSON으로만 답한다.
+
+- keyword: 새 아이디어 이름 1~3단어.
+- idea: 사용자가 직접 적은 메모처럼 자연스러운 2~4문장. 누구를 위해 무엇을 해주는지, 무엇이 새로운지. 너무 거창하지 않게, 혼자 만들 수 있는 크기로.
+- spark: 어떤 씨앗을 어떻게 엮고 어떤 각도를 적용했는지 한 줄(40자 이내).
+- used_ids: 실제로 영감을 받은 씨앗 id.
+씨앗을 단순히 합쳐 다시 말하지 말고, 반드시 새로운 요소가 하나 이상 있어야 한다. 답은 한국어로.`;
+
+const SPARK_SCHEMA = {
+  type: 'object',
+  properties: {
+    keyword: { type: 'string' },
+    idea: { type: 'string' },
+    spark: { type: 'string' },
+    used_ids: { type: 'array', items: { type: 'string' } },
+  },
+  required: ['keyword', 'idea', 'spark', 'used_ids'],
+  additionalProperties: false,
+};
+
+const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
+// 씨앗 고르기: 무작위 하나 + 연결된 것 하나 + (가끔) 다른 묶음의 것 하나
+function pickSeeds(ideas) {
+  const done = ideas.filter((i) => i.status === 'done');
+  if (done.length < 2) return [];
+  const a = pick(done);
+  const seeds = [a];
+  const linked = done.filter((i) => a.links?.includes(i.id));
+  const b = linked.length && Math.random() < 0.7 ? pick(linked) : pick(done.filter((i) => i.id !== a.id));
+  seeds.push(b);
+  const far = done.filter((i) => !seeds.includes(i) && i.clusterId !== a.clusterId);
+  if (far.length && Math.random() < 0.5) seeds.push(pick(far));
+  return seeds;
+}
+
+export async function spark() {
+  const ideas = await db.all('ideas');
+  const seeds = pickSeeds(ideas);
+  if (!seeds.length) throw new Error('not enough');
+  const twist = pick(TWISTS);
+  const user = `## 씨앗 아이디어\n${seeds.map(ideaBlock).join('\n\n')}\n\n## 이번 각도\n${twist}`;
+  const r = await callClaude({ system: SPARK_SYSTEM, user, schema: SPARK_SCHEMA, maxTokens: 4000, effort: 'medium', kind: 'spark' });
+  const ok = new Set(seeds.map((x) => x.id));
+  const used = [...new Set((r.used_ids || []).filter((x) => ok.has(x)))];
+  const now = Date.now();
+  const idea = {
+    id: db.uid(),
+    text: String(r.idea || '').trim() || line(r.keyword),
+    createdAt: now, updatedAt: now,
+    links: used.length ? used : [...ok],
+    clusterId: null,
+    status: 'pending',
+    origin: 'ai',
+    aiNote: line(r.spark),
+    aiTwist: twist,
+    seeds: used.length ? used : [...ok],
+  };
+  await db.put('ideas', idea);
+  for (const x of idea.links) {
+    const o = await db.get('ideas', x);
+    if (o && !o.links?.includes(idea.id)) { o.links = [...(o.links || []), idea.id]; await db.put('ideas', o); }
+  }
+  return idea;
+}
+
+export const canSpark = (ideas) => ideas.filter((i) => i.status === 'done').length >= 3;
