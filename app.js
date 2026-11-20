@@ -4,18 +4,20 @@ import { createMap, clusterColor } from './map.js';
 
 const $ = (id) => document.getElementById(id);
 const input = $('input'), mic = $('mic'), gear = $('gear'), scrim = $('scrim');
-const detail = $('detail'), settings = $('settings'), askSheet = $('ask');
-const SHEETS = [detail, settings, askSheet];
+const detail = $('detail'), settings = $('settings'), askSheet = $('ask'), propSheet = $('prop');
+const SHEETS = [detail, settings, askSheet, propSheet];
+const sparkBtn = $('spark');
 
 // ---------- 맵 ----------
-const map = createMap($('map'), { onTap: openDetail });
+const map = createMap($('map'), { onTap: openDetail, onAim: (t) => sparkBtn.classList.toggle('aim', !!t) });
 let current = null; // 상세 보기 중인 아이디어 id
 
 async function refresh() {
-  const [ideas, clusters] = await Promise.all([db.all('ideas'), db.all('clusters')]);
+  const [ideas, clusters, groups] = await Promise.all([db.all('ideas'), db.all('clusters'), ai.getGroups()]);
   ideas.sort((a, b) => a.createdAt - b.createdAt);
-  map.update(ideas, clusters);
+  map.update(ideas, clusters, groups);
   $('empty').classList.toggle('hide', ideas.length > 0);
+  sparkBtn.classList.toggle('show', ideas.some((i) => i.status === 'done'));
   if (current) {
     const it = ideas.find((i) => i.id === current);
     if (it) fillDetail(it, clusters); else closeSheets();
@@ -156,7 +158,6 @@ function fillDetail(it, clusters) {
   key.style.color = it.keyword ? clusterColor(c ? c.color : null) : 'var(--dim)';
   if ($('d-edit').hidden) $('d-text').textContent = it.text;
   $('d-date').textContent = fmt.format(new Date(it.createdAt));
-  $('d-merge').hidden = !(it.links && it.links.length);
   $('d-note').hidden = !it.aiNote;
   $('d-note').textContent = it.aiNote ? '✦ ' + it.aiNote : '';
 }
@@ -195,11 +196,12 @@ $('d-save').addEventListener('click', async () => {
 });
 
 let armTimer = null;
-function disarm() { $('d-del').classList.remove('armed'); clearTimeout(armTimer); }
+function disarm() { $('d-del').classList.remove('armed'); $('d-del').textContent = '삭제'; clearTimeout(armTimer); }
 $('d-del').addEventListener('click', async () => {
   const btn = $('d-del');
   if (!btn.classList.contains('armed')) {
     btn.classList.add('armed');
+    btn.textContent = '삭제?';
     armTimer = setTimeout(disarm, 2500);
     return;
   }
@@ -227,7 +229,7 @@ function closeSheets() {
   scrim.classList.remove('on');
   if (lensActive) { lensActive = false; map.lens(null); }
 }
-scrim.addEventListener('click', closeSheets);
+scrim.addEventListener('click', () => { if (!propSheet.classList.contains('open')) closeSheets(); });
 
 // 아래로 쓸어내려 닫기
 for (const sheet of SHEETS) {
@@ -244,7 +246,7 @@ for (const sheet of SHEETS) {
   sheet.addEventListener('touchend', () => {
     if (y0 == null) return;
     sheet.style.transition = ''; sheet.style.transform = '';
-    if (dy > 80) closeSheets();
+    if (dy > 80 && sheet !== propSheet) closeSheets();
     y0 = null;
   });
 }
@@ -357,7 +359,9 @@ navigator.storage?.persist?.().catch(() => {});
 (async () => {
   if (!(await db.getMeta('modelV2'))) { await db.setMeta('model', ai.DEFAULT_MODEL); await db.setMeta('modelV2', true); }
   await refresh();
-  scheduleSpark(15000 + Math.random() * 20000);
+  // "? 로 물어보기" 안내는 처음 3번 앱을 열 때만 (질문을 한 번 쓰면 바로 사라짐)
+  const hint = await db.getMeta('askHint', 0);
+  if (hint < 3) { input.placeholder = '? 로 물어보기'; await db.setMeta('askHint', hint + 1); }
   if (await db.getMeta('keyError')) gear.className = 'error';
   else if (!(await db.getMeta('apiKey'))) gear.className = 'pending';
   kick();
@@ -392,6 +396,8 @@ function askLoading(q) {
 
 async function runAsk(q) {
   const seq = ++askSeq;
+  input.placeholder = '';
+  db.setMeta('askHint', 99);
   askLoading(q);
   try {
     const entry = await ai.ask(q);
@@ -478,44 +484,13 @@ async function renderUsage() {
     : '<div class="ur"><span>아직 없음</span></div>';
 }
 
-// ---------- 상세: 합치기 · 개발 프롬프트 ----------
+// ---------- 상세: 개발 프롬프트 ----------
 let extraSeq = 0;
 function setExtra(html, which = null) {
   $('d-extra').innerHTML = html ? `<div class="extra">${html}</div>` : '';
-  $('d-merge').classList.toggle('on', which === 'merge');
   $('d-build').classList.toggle('on', which === 'build');
   if (!html) extraSeq++;
 }
-
-$('d-merge').addEventListener('click', async () => {
-  if ($('d-merge').classList.contains('on')) return setExtra(null);
-  const id = current, seq = ++extraSeq;
-  setExtra(LOADING, 'merge');
-  try {
-    const r = await ai.merge(id);
-    if (seq !== extraSeq || current !== id) return;
-    const ideas = new Map((await db.all('ideas')).map((i) => [i.id, i]));
-    const used = r.used_ids.map((x) => ideas.get(x)?.keyword).filter(Boolean).join(' + ');
-    setExtra(`<div class="t">${esc(r.keyword)}</div><div class="p">${esc(r.pitch)}</div>
-      <div class="used">${esc(used)}</div>
-      <div class="bar"><button class="primary" id="x-save">기록</button></div>`, 'merge');
-    $('x-save').onclick = async () => {
-      const now = Date.now();
-      const nid = db.uid();
-      await db.put('ideas', { id: nid, text: `${r.keyword}\n${r.pitch}`, createdAt: now, updatedAt: now, links: r.used_ids, seeds: r.used_ids, clusterId: null, status: 'pending', origin: 'ai', aiNote: `합치기 · ${used}` });
-      for (const x of r.used_ids) {
-        const o = await db.get('ideas', x);
-        if (o && !o.links?.includes(nid)) { o.links = [...(o.links || []), nid]; await db.put('ideas', o); }
-      }
-      toast('✓');
-      await refresh();
-      kick();
-      openDetail(nid);
-    };
-  } catch (e) {
-    if (seq === extraSeq) setExtra(`<div class="p">${esc(ai.errorText(e))}</div>`, 'merge');
-  }
-});
 
 $('d-build').addEventListener('click', async () => {
   if ($('d-build').classList.contains('on')) return setExtra(null);
@@ -548,79 +523,63 @@ $('d-build').addEventListener('click', async () => {
   if (it.buildPrompt && it.buildFor === it.text) show(it.buildPrompt); else generate();
 });
 
-// ---------- 떠다니는 영감(+) ----------
-// 무작위 아이디어 하나 옆에 떠서 그 노드를 따라다님. 누르면 그 아이디어와 주변을 엮음
-const sparkBtn = $('spark');
-let sparkTimer = null, sparkHide = null, sparking = false, sparkAnchor = null, sparkRaf = 0;
-const rand = (a, b) => a + Math.random() * (b - a);
-const OFFSET = { x: 22, y: -20 };
-
-function scheduleSpark(ms) {
-  clearTimeout(sparkTimer);
-  sparkTimer = setTimeout(showSpark, ms);
-}
-
-// 화면 안(위 상태줄·아래 입력창 피해서)에 보이는 노드만 후보
-function visibleAnchors(ideas) {
-  const top = window.innerHeight * 0.12, bottom = window.innerHeight * 0.72;
-  return ideas.filter((i) => {
-    if (i.status !== 'done') return false;
-    const p = map.screenPos(i.id);
-    return p && p.x > 40 && p.x < window.innerWidth - 70 && p.y > top && p.y < bottom;
-  });
-}
-
-function followAnchor() {
-  const p = sparkAnchor && map.screenPos(sparkAnchor);
-  if (p) {
-    sparkBtn.style.left = p.x + OFFSET.x + 'px';
-    sparkBtn.style.top = p.y + OFFSET.y + 'px';
-  }
-  if (sparkBtn.classList.contains('show')) sparkRaf = requestAnimationFrame(followAnchor);
-}
-
-async function showSpark() {
-  const ideas = await db.all('ideas');
-  const busySheet = SHEETS.some((s) => s.classList.contains('open'));
-  if (document.hidden || !navigator.onLine || busySheet || !(await db.getMeta('apiKey')) || !ai.canSpark(ideas)) {
-    return scheduleSpark(60000);
-  }
-  const cands = visibleAnchors(ideas);
-  if (!cands.length) return scheduleSpark(60000);
-  sparkAnchor = cands[Math.floor(Math.random() * cands.length)].id;
-  map.mark(sparkAnchor);
-  sparkBtn.classList.add('show');
-  cancelAnimationFrame(sparkRaf);
-  followAnchor();
-  clearTimeout(sparkHide);
-  sparkHide = setTimeout(hideSpark, 30000);
-}
-
-function hideSpark() {
-  if (sparking) return;
-  sparkBtn.classList.remove('show');
-  cancelAnimationFrame(sparkRaf);
-  map.mark(null);
-  sparkAnchor = null;
-  scheduleSpark(rand(120000, 300000)); // 2~5분 뒤 다시
-}
+// ---------- 영감(+): 화면 가운데 조준점 ----------
+// 맵을 움직여 +를 원하는 아이디어(또는 물방울)에 맞추고 누르면 그곳을 씨앗으로 새 아이디어 제안
+let sparking = false, proposal = null, propSeq = 0;
 
 sparkBtn.addEventListener('click', async () => {
   if (sparking) return;
+  if (!(await db.getMeta('apiKey'))) return toast('API key');
+  if (!navigator.onLine) return toast('오프라인');
+  const target = map.aim();
+  const seq = ++propSeq;
   sparking = true;
-  clearTimeout(sparkHide);
   sparkBtn.classList.add('busy');
   if (navigator.vibrate) navigator.vibrate(12);
+  proposal = null;
+  $('p-from').textContent = target ? `✦ ${target.label}에서` : '✦ 노트 전체에서';
+  $('p-key').textContent = '';
+  $('p-text').innerHTML = LOADING;
+  $('p-why').textContent = '';
+  $('p-meta').textContent = '';
+  $('p-bar').hidden = true;
+  openSheet(propSheet);
   try {
-    const idea = await ai.spark(sparkAnchor);
-    await refresh();
-    kick();
-    setTimeout(() => openDetail(idea.id), 500);
+    const p = await ai.spark(target ? target.ideaIds : []);
+    if (seq !== propSeq) return;
+    proposal = p;
+    const ideas = new Map((await db.all('ideas')).map((i) => [i.id, i]));
+    $('p-key').textContent = p.keyword;
+    $('p-text').textContent = p.idea;
+    $('p-why').innerHTML = [p.why && esc(p.why), p.outside && '+ ' + esc(p.outside)].filter(Boolean).join('<br>');
+    const used = p.used_ids.map((x) => ideas.get(x)?.keyword).filter(Boolean);
+    $('p-meta').textContent = [used.join(' · '), p.usage && usageText(p.usage)].filter(Boolean).join('\n');
+    $('p-keep').hidden = false;
+    $('p-drop').textContent = '폐기';
   } catch (e) {
-    toast(ai.errorText(e));
+    if (seq !== propSeq) return;
+    $('p-text').textContent = ai.errorText(e);
+    $('p-keep').hidden = true;
+    $('p-drop').textContent = '닫기';
   } finally {
-    sparking = false;
-    sparkBtn.classList.remove('busy');
-    hideSpark();
+    if (seq === propSeq) { sparking = false; sparkBtn.classList.remove('busy'); $('p-bar').hidden = false; }
   }
+});
+
+function closeProposal() {
+  propSheet.classList.remove('open');
+  propSheet.setAttribute('aria-hidden', 'true');
+  scrim.classList.remove('on');
+  proposal = null;
+}
+
+$('p-drop').addEventListener('click', closeProposal);
+$('p-keep').addEventListener('click', async () => {
+  if (!proposal) return closeProposal();
+  const idea = await ai.keepProposal(proposal);
+  closeProposal();
+  toast('✓');
+  await refresh();
+  kick();
+  setTimeout(() => openDetail(idea.id), 400);
 });

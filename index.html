@@ -41,23 +41,22 @@
     <div class="row">
       <time id="d-date"></time>
       <div class="acts">
-        <button id="d-merge" aria-label="merge">
-          <svg viewBox="0 0 24 24"><circle cx="9" cy="12" r="5"/><circle cx="15" cy="12" r="5"/></svg>
-        </button>
-        <button id="d-build" aria-label="build prompt">
-          <svg viewBox="0 0 24 24"><path d="M8.5 8L4.5 12l4 4M15.5 8l4 4-4 4M13.5 5.5l-3 13"/></svg>
-        </button>
-        <button id="d-editbtn" aria-label="edit">
-          <svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16v4zM13.5 6.5l4 4"/></svg>
-        </button>
-        <button id="d-save" aria-label="save" hidden>
-          <svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
-        </button>
-        <button id="d-del" aria-label="delete">
-          <svg viewBox="0 0 24 24"><path d="M5 7h14M10 7V4.5h4V7M7 7l1 13h8l1-13"/></svg>
-        </button>
+        <button id="d-build" class="tb">프롬프트</button>
+        <button id="d-editbtn" class="tb">수정</button>
+        <button id="d-save" class="tb" hidden>저장</button>
+        <button id="d-del" class="tb">삭제</button>
       </div>
     </div>
+  </section>
+
+  <section id="prop" class="sheet" aria-hidden="true">
+    <div class="grip"></div>
+    <div id="p-from"></div>
+    <div id="p-key"></div>
+    <div id="p-text"></div>
+    <div id="p-why"></div>
+    <div id="p-meta"></div>
+    <div class="bar" id="p-bar"><button id="p-drop">폐기</button><button id="p-keep" class="primary">보관</button></div>
   </section>
 
   <section id="ask" class="sheet" aria-hidden="true">

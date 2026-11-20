@@ -96,7 +96,8 @@ const PROCESS_SYSTEM = `너는 한 사람의 개인 아이디어 노트를 정�
 - summary: 무엇을 누구에게 해주는지 한 줄 요약. 40자 이내. 마침표 없이.
 - related_ids: 기존 아이디어 중 실제로 연관된 것의 id. 같은 문제를 풀거나, 같은 사용자를 노리거나, 합치면 하나의 제품이 될 만한 것만. 억지로 채우지 말 것. 0~4개. 목록에 있는 id만 사용.
 - cluster_id: 기존 묶음 중 이 아이디어가 자연스럽게 속하는 것의 id. 맞는 것이 없으면 "".
-- new_cluster_name: cluster_id가 ""일 때만, 이 아이디어가 열 새 묶음 이름(2~4단어, 주제 영역을 나타내는 이름. 예: "건강 관리", "개발자 도구"). cluster_id를 골랐으면 "".`;
+- new_cluster_name: cluster_id가 ""일 때만, 이 아이디어가 열 새 묶음 이름(2~4단어, 주제 영역을 나타내는 이름. 예: "건강 관리", "개발자 도구"). cluster_id를 골랐으면 "".
+- same_as_id: 기존 아이디어 중 사실상 같은 아이디어(표현만 다름)이거나, 한쪽이 다른 쪽을 포함하는 상위·하위 관계인 것이 있으면 그 id 하나. 단지 관련만 있으면 "". 없으면 "".`;
 
 const PROCESS_SCHEMA = {
   type: 'object',
@@ -106,8 +107,9 @@ const PROCESS_SCHEMA = {
     related_ids: { type: 'array', items: { type: 'string' } },
     cluster_id: { type: 'string' },
     new_cluster_name: { type: 'string' },
+    same_as_id: { type: 'string' },
   },
-  required: ['keyword', 'summary', 'related_ids', 'cluster_id', 'new_cluster_name'],
+  required: ['keyword', 'summary', 'related_ids', 'cluster_id', 'new_cluster_name', 'same_as_id'],
   additionalProperties: false,
 };
 
@@ -118,7 +120,10 @@ const RECLUSTER_SYSTEM = `너는 한 사람의 개인 아이디어 노트 전체
   묶음 수는 아이디어 수에 맞게 자연스럽게(대략 아이디어 3~6개당 하나, 최대 10개). 어디에도 맞지 않는 아이디어만 혼자 묶음이 될 수 있다.
   name: 2~4단어의 짧은 주제 이름(예: "건강 관리", "개발자 도구", "부모 육아").
 - links: 서로 실제로 연관된 아이디어 쌍. 같은 문제를 풀거나, 같은 사용자를 노리거나, 합치면 하나의 제품이 될 만한 것만.
-  다른 묶음 사이의 연결도 허용. 아이디어 하나당 최대 4개. 억지로 만들지 말 것. 목록에 있는 id만 사용.`;
+  다른 묶음 사이의 연결도 허용. 아이디어 하나당 최대 4개. 억지로 만들지 말 것. 목록에 있는 id만 사용.
+- groups: 사실상 같은 아이디어(표현만 다름)이거나, 하나가 나머지를 포함하는 상위 아이디어인 것들의 모음. 단지 관련만 있는 것은 넣지 말 것.
+  각 모음은 2개 이상, 아이디어 하나는 최대 한 모음에만. 없으면 빈 배열.
+  name: 그 모음을 대표하는 1~3단어 이름(상위 아이디어가 있으면 그 이름).`;
 
 const RECLUSTER_SCHEMA = {
   type: 'object',
@@ -144,8 +149,20 @@ const RECLUSTER_SCHEMA = {
         additionalProperties: false,
       },
     },
+    groups: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          idea_ids: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['name', 'idea_ids'],
+        additionalProperties: false,
+      },
+    },
   },
-  required: ['clusters', 'links'],
+  required: ['clusters', 'links', 'groups'],
   additionalProperties: false,
 };
 
@@ -214,6 +231,22 @@ async function processIdea(idea) {
     }
   }
   await db.pruneClusters();
+
+  // 거의 같은/상위·하위 아이디어 → 같은 물방울로
+  if (r.same_as_id && ids.has(r.same_as_id)) await joinGroup(r.same_as_id, fresh.id);
+}
+
+// ---------- 물방울(그룹) ----------
+// meta 'groups': [{ id, name, members: [ideaId] }] — 아이디어 하나는 최대 한 그룹
+export const getGroups = () => db.getMeta('groups', []);
+
+async function joinGroup(targetId, newId) {
+  const groups = (await getGroups()).map((g) => ({ ...g, members: g.members.filter((m) => m !== newId) }));
+  const target = await db.get('ideas', targetId);
+  let g = groups.find((x) => x.members.includes(targetId));
+  if (g) g.members.push(newId);
+  else groups.push({ id: db.uid(), name: line(target?.keyword) || '', members: [targetId, newId] });
+  await db.setMeta('groups', groups.filter((x) => x.members.length >= 2));
 }
 
 export async function recluster() {
@@ -255,6 +288,25 @@ export async function recluster() {
   for (const { a, b } of r.links || []) {
     if (a !== b && ids.has(a) && ids.has(b)) { links.get(a).add(b); links.get(b).add(a); }
   }
+  // AI가 만든 아이디어의 출처 연결은 유지
+  for (const i of ideas) for (const x of i.seeds || []) {
+    if (x !== i.id && ids.has(x)) { links.get(i.id).add(x); links.get(x).add(i.id); }
+  }
+
+  const inGroup = new Set();
+  const groups = [];
+  for (const g of r.groups || []) {
+    const members = [...new Set(g.idea_ids || [])].filter((x) => ids.has(x) && !inGroup.has(x));
+    if (members.length < 2) continue;
+    members.forEach((m) => inGroup.add(m));
+    groups.push({ id: db.uid(), name: line(g.name), members });
+  }
+  // 아직 처리 안 된 아이디어가 속한 기존 그룹은 남겨둠
+  for (const g of await getGroups()) {
+    const rest = g.members.filter((m) => !ids.has(m) && !inGroup.has(m));
+    if (rest.length) groups.push({ ...g, members: [...g.members.filter((m) => ids.has(m) && !inGroup.has(m)), ...rest] });
+  }
+  await db.setMeta('groups', groups.filter((g) => g.members.length >= 2));
 
   await db.clear('clusters');
   for (const c of next) await db.put('clusters', c);
@@ -386,37 +438,6 @@ export async function ask(query) {
   return entry;
 }
 
-const MERGE_SYSTEM = `너는 아이디어를 엮어 더 강한 제품을 찾아주는 제품 기획자다.
-기준 아이디어 하나와, 그것과 연결된 아이디어들을 받는다. 이들 중 2~3개를 합쳐 하나의 제품 콘셉트를 제안하고 JSON으로만 답한다.
-
-- keyword: 합친 콘셉트의 이름 1~3단어.
-- pitch: 3~4문장. 누구를 위한 무엇인지, 핵심 기능, 그리고 따로 만들 때보다 합쳤을 때 왜 더 나은지.
-- used_ids: 합치는 데 쓴 아이디어의 id(기준 아이디어 포함). 목록에 있는 id만.
-억지스러운 조합은 피하고, 가장 자연스러운 조합 하나만 고른다. 답은 한국어로.`;
-
-const MERGE_SCHEMA = {
-  type: 'object',
-  properties: {
-    keyword: { type: 'string' },
-    pitch: { type: 'string' },
-    used_ids: { type: 'array', items: { type: 'string' } },
-  },
-  required: ['keyword', 'pitch', 'used_ids'],
-  additionalProperties: false,
-};
-
-export async function merge(id) {
-  const base = await db.get('ideas', id);
-  if (!base) throw new Error('missing');
-  const others = (await Promise.all((base.links || []).map((x) => db.get('ideas', x)))).filter(Boolean);
-  const user = `## 기준 아이디어\n${ideaBlock(base)}\n\n## 연결된 아이디어\n${others.map(ideaBlock).join('\n\n')}`;
-  const r = await callClaude({ system: MERGE_SYSTEM, user, schema: MERGE_SCHEMA, maxTokens: 4000, effort: 'medium', kind: 'merge' });
-  const ok = new Set([base.id, ...others.map((o) => o.id)]);
-  r.used_ids = [...new Set([base.id, ...(r.used_ids || []).filter((x) => ok.has(x))])];
-  r.keyword = line(r.keyword);
-  return r;
-}
-
 const BUILD_SYSTEM = `너는 아이디어를 AI 코딩 도구(Claude Code 등)에 그대로 붙여넣을 개발 지시문으로 바꿔주는 도우미다.
 혼자 바이브 코딩으로 하루~며칠 안에 만들 첫 버전(MVP)을 기준으로, 아래 구성의 한국어 지시문을 JSON의 prompt 필드에 담아 답한다.
 
@@ -460,96 +481,75 @@ export function errorText(e) {
   return '✕';
 }
 
-// ---------- AI 영감: 내 아이디어들을 엮어 새 아이디어 ----------
+// ---------- 영감(+): 조준한 아이디어를 씨앗으로 새 아이디어 제안 ----------
 
-// 매번 다른 각도를 하나 골라 결합
-const TWISTS = [
-  '전혀 다른 사용자층(예: 부모, 시니어, 학생, 자영업자, 반려인)에게 옮겨보기',
-  '개인용을 팀·회사용(B2B)으로 바꿔보기',
-  '반대로 뒤집기: 기록 대신 줄여주기, 알려주는 대신 물어보기처럼',
-  '하루 만에 만들 수 있는 아주 작은 한 기능짜리 버전으로 줄이기',
-  '사람 대신 AI 에이전트가 알아서 대신 해주는 형태로 바꾸기',
-  '혼자 쓰던 것을 친구·커뮤니티와 함께 쓰는 소셜 형태로 바꾸기',
-  '모이는 데이터를 전혀 다른 용도로 다시 쓰기',
-  '오프라인 장소·물건·이벤트와 결합하기',
-  '돈을 버는 방식부터 정하고 거꾸로 설계하기 (구독, 건당 결제, 중개 수수료 등)',
-  '게임처럼 만들기: 점수, 연속 기록, 수집 요소',
-  '음성·카메라·위치 같은 휴대폰 센서를 핵심으로 쓰기',
-  '귀찮은 반복 작업 하나를 완전히 자동화하는 데만 집중하기',
-];
-
-const SPARK_SYSTEM = `너는 한 사람의 아이디어 노트에서 영감을 받아 새 아이디어를 떠올리는 공동 창업자다.
+const SPARK_SYSTEM = `너는 한 사람의 아이디어 노트를 함께 키우는 공동 창업자다.
 메모는 바이브 코딩(AI로 빠르게 혼자 만드는 방식)으로 만들 서비스나 상품 아이디어다.
-씨앗 아이디어 2~3개와 이번에 적용할 각도 하나를 받는다. 씨앗들을 엮고 각도를 적용해, 기존 메모에 없는 새롭거나 한 단계 업그레이드된 아이디어 하나를 JSON으로만 답한다.
+씨앗 아이디어와 노트 전체 목록(id | 키워드 | 요약)을 받는다. 다음 순서로 생각하고 JSON으로만 답한다.
+
+1. 연결선 여부와 상관없이 노트 전체에서 씨앗과 의미 있게 이어질 아이디어를 0~3개 찾는다. 겉보기엔 달라도 같은 사용자·같은 데이터·같은 순간을 공유하는 것까지 살핀다.
+2. 노트에 없는 바깥 요소를 하나 이상 가져온다: 관련 시장 흐름, 새로 쓸 수 있게 된 기술, 다른 분야의 성공 사례, 사용자 행동의 변화 등. 실제로 있는 것만.
+3. 이것들을 결합해 새롭고 건설적인 아이디어 하나를 제안한다. 씨앗을 다시 말하거나 단순히 합친 것이 아니라, 새로운 가치가 분명해야 한다. 혼자 만들 수 있는 크기로.
 
 - keyword: 새 아이디어 이름 1~3단어.
-- idea: 사용자가 직접 적은 메모처럼 자연스러운 2~4문장. 누구를 위해 무엇을 해주는지, 무엇이 새로운지. 너무 거창하지 않게, 혼자 만들 수 있는 크기로.
-- spark: 어떤 씨앗을 어떻게 엮고 어떤 각도를 적용했는지 한 줄(40자 이내).
-- used_ids: 실제로 영감을 받은 씨앗 id.
-씨앗을 단순히 합쳐 다시 말하지 말고, 반드시 새로운 요소가 하나 이상 있어야 한다. 답은 한국어로.`;
+- idea: 사용자가 직접 적은 메모처럼 자연스러운 2~4문장. 누구를 위해 무엇을 해주는지, 첫 사용 장면, 무엇이 새로운지.
+- outside: 가져온 바깥 요소 한 줄(40자 이내).
+- why: 무엇을 어떻게 엮었는지 한 줄(40자 이내).
+- used_ids: 씨앗을 포함해 실제로 영감을 받은 아이디어 id. 목록에 있는 id만.
+답은 한국어로.`;
 
 const SPARK_SCHEMA = {
   type: 'object',
   properties: {
     keyword: { type: 'string' },
     idea: { type: 'string' },
-    spark: { type: 'string' },
+    outside: { type: 'string' },
+    why: { type: 'string' },
     used_ids: { type: 'array', items: { type: 'string' } },
   },
-  required: ['keyword', 'idea', 'spark', 'used_ids'],
+  required: ['keyword', 'idea', 'outside', 'why', 'used_ids'],
   additionalProperties: false,
 };
 
-const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
-
-// 씨앗 고르기: 기준 아이디어 + 그 주변(연결 → 연결의 연결 → 같은 묶음) 1~2개
-// 가끔(25%) 먼 묶음의 아이디어 하나를 섞어 의외성을 줌
-function pickSeeds(ideas, anchorId) {
-  const done = ideas.filter((i) => i.status === 'done');
-  if (done.length < 2) return [];
-  const byId = new Map(done.map((i) => [i.id, i]));
-  const a = byId.get(anchorId) || pick(done);
-  const seeds = [a];
-  const take = (pool) => {
-    const c = pool.filter((i) => i && !seeds.includes(i));
-    if (!c.length) return false;
-    seeds.push(pick(c));
-    return true;
+// seedIds: 조준한 아이디어(물방울이면 구성원 전부). 비어 있으면 노트 전체에서 자유롭게.
+// 저장하지 않고 제안만 돌려줌 → 사용자가 보관/폐기
+export async function spark(seedIds = []) {
+  const ideas = (await db.all('ideas')).filter((i) => i.status === 'done');
+  if (!ideas.length) throw new Error('not enough');
+  const seeds = ideas.filter((i) => seedIds.includes(i.id));
+  const user = [
+    '## 씨앗',
+    seeds.length ? seeds.map(ideaBlock).join('\n\n') : '(없음: 노트 전체에서 자유롭게 하나를 골라 씨앗으로 삼을 것)',
+    '',
+    '## 노트 전체 (id | 키워드 | 요약)',
+    ideas.map((i) => `${i.id} | ${line(i.keyword)} | ${line(i.summary)}`).join('\n'),
+  ].join('\n');
+  const r = await callClaude({ system: SPARK_SYSTEM, user, schema: SPARK_SCHEMA, maxTokens: 4000, effort: 'medium', kind: 'spark' });
+  const ok = new Set(ideas.map((i) => i.id));
+  const used = [...new Set([...seeds.map((x) => x.id), ...(r.used_ids || []).filter((x) => ok.has(x))])];
+  return {
+    keyword: line(r.keyword),
+    idea: String(r.idea || '').trim(),
+    outside: line(r.outside),
+    why: line(r.why),
+    used_ids: used,
+    usage: r._usage,
   };
-  const linked = (a.links || []).map((x) => byId.get(x));
-  const second = linked.flatMap((l) => (l?.links || []).map((x) => byId.get(x)));
-  const sameCluster = done.filter((i) => a.clusterId && i.clusterId === a.clusterId);
-  const near = [linked, second, sameCluster];
-  // 주변에서 하나는 꼭
-  near.some(take) || take(done);
-  // 하나 더: 대부분 주변, 가끔 먼 곳
-  const far = done.filter((i) => i.clusterId !== a.clusterId);
-  if (Math.random() < 0.25 && far.length) take(far);
-  else if (Math.random() < 0.6) near.some(take);
-  return seeds;
 }
 
-export async function spark(anchorId) {
-  const ideas = await db.all('ideas');
-  const seeds = pickSeeds(ideas, anchorId);
-  if (!seeds.length) throw new Error('not enough');
-  const twist = pick(TWISTS);
-  const user = `## 씨앗 아이디어\n${seeds.map(ideaBlock).join('\n\n')}\n\n## 이번 각도\n${twist}`;
-  const r = await callClaude({ system: SPARK_SYSTEM, user, schema: SPARK_SCHEMA, maxTokens: 4000, effort: 'medium', kind: 'spark' });
-  const ok = new Set(seeds.map((x) => x.id));
-  const used = [...new Set((r.used_ids || []).filter((x) => ok.has(x)))];
+// 제안 보관 → 맵에 ✦ 아이디어로 추가
+export async function keepProposal(p) {
   const now = Date.now();
   const idea = {
     id: db.uid(),
-    text: String(r.idea || '').trim() || line(r.keyword),
+    text: p.idea || p.keyword,
     createdAt: now, updatedAt: now,
-    links: used.length ? used : [...ok],
+    links: [...p.used_ids],
+    seeds: [...p.used_ids],
     clusterId: null,
     status: 'pending',
     origin: 'ai',
-    aiNote: line(r.spark),
-    aiTwist: twist,
-    seeds: used.length ? used : [...ok],
+    aiNote: [p.why, p.outside && '+ ' + p.outside].filter(Boolean).join('  '),
   };
   await db.put('ideas', idea);
   for (const x of idea.links) {
@@ -558,5 +558,3 @@ export async function spark(anchorId) {
   }
   return idea;
 }
-
-export const canSpark = (ideas) => ideas.filter((i) => i.status === 'done').length >= 3;

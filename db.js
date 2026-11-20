@@ -60,6 +60,11 @@ export async function deleteIdea(id) {
       await put('ideas', it);
     }
   }
+  // 물방울에서도 빼고, 1개만 남은 물방울은 해제
+  const groups = (await getMeta('groups', []))
+    .map((g) => ({ ...g, members: g.members.filter((m) => m !== id) }))
+    .filter((g) => g.members.length >= 2);
+  await setMeta('groups', groups);
   await pruneClusters();
 }
 
@@ -78,6 +83,7 @@ export async function exportAll() {
     ideas: await all('ideas'),
     clusters: await all('clusters'),
     asks: await all('asks'),
+    groups: await getMeta('groups', []),
   };
 }
 
@@ -86,6 +92,16 @@ export async function importAll(data) {
   if (!data || !Array.isArray(data.ideas)) throw new Error('bad file');
   for (const c of data.clusters || []) if (c?.id) await put('clusters', c);
   for (const a of data.asks || []) if (a?.id && a.q) await put('asks', a);
+  if (Array.isArray(data.groups)) {
+    const groups = await getMeta('groups', []);
+    const taken = new Set(groups.flatMap((g) => g.members));
+    for (const g of data.groups) {
+      if (!g?.id || groups.some((x) => x.id === g.id)) continue;
+      const members = (g.members || []).filter((m) => !taken.has(m));
+      if (members.length >= 2) { groups.push({ ...g, members }); members.forEach((m) => taken.add(m)); }
+    }
+    await setMeta('groups', groups);
+  }
   for (const i of data.ideas) {
     if (!i?.id || typeof i.text !== 'string') continue;
     await put('ideas', {
