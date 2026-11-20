@@ -68,7 +68,7 @@ const PRICES = {
   'claude-haiku-5-5': [0.1, 0.5],
 };
 const priceOf = (m) => PRICES[m] || PRICES[Object.keys(PRICES).find((k) => m?.startsWith(k))] || PRICES[DEFAULT_MODEL];
-export const KINDS = { process: '기록 처리', recluster: '다시 묶기', ask: '질문', merge: '합치기', spark: 'AI 영감', build: '개발 프롬프트' };
+export const KINDS = { process: '기록 처리', tidy: '정리본', recluster: '다시 묶기', ask: '질문', merge: '합치기', spark: 'AI 영감', build: '개발 프롬프트' };
 
 async function recordUsage(kind, model, u) {
   if (!u) return null;
@@ -93,6 +93,7 @@ const PROCESS_SYSTEM = `너는 한 사람의 개인 아이디어 노트를 정�
 새 아이디어 하나와 기존 아이디어 목록, 기존 묶음 목록을 받는다. 다음을 JSON으로만 답한다.
 
 - keyword: 아이디어의 핵심을 나타내는 1~3단어. 메모와 같은 언어(보통 한국어). 명사형, 짧게. 예: "식단 기록봇", "중고 시세 알림".
+- clean: 메모를 명료하고 깔끔하게 다시 쓴 글. 음성 인식 오류, 군더더기, 반복, 말 더듬은 정리하고 사용자가 말한 내용만 담는다. 새 내용, 꾸밈말, 과장, 해석을 덧붙이지 말 것. 생각의 순서와 핵심 표현은 살리되 짧게: 보통 1~3문장, 원문보다 길지 않게. 원문이 이미 깔끔하면 거의 그대로 둔다.
 - summary: 무엇을 누구에게 해주는지 한 줄 요약. 40자 이내. 마침표 없이.
 - related_ids: 기존 아이디어 중 실제로 연관된 것의 id. 같은 문제를 풀거나, 같은 사용자를 노리거나, 합치면 하나의 제품이 될 만한 것만. 억지로 채우지 말 것. 0~4개. 목록에 있는 id만 사용.
 - cluster_id: 기존 묶음 중 이 아이디어가 자연스럽게 속하는 것의 id. 맞는 것이 없으면 "".
@@ -103,13 +104,14 @@ const PROCESS_SCHEMA = {
   type: 'object',
   properties: {
     keyword: { type: 'string' },
+    clean: { type: 'string' },
     summary: { type: 'string' },
     related_ids: { type: 'array', items: { type: 'string' } },
     cluster_id: { type: 'string' },
     new_cluster_name: { type: 'string' },
     same_as_id: { type: 'string' },
   },
-  required: ['keyword', 'summary', 'related_ids', 'cluster_id', 'new_cluster_name', 'same_as_id'],
+  required: ['keyword', 'clean', 'summary', 'related_ids', 'cluster_id', 'new_cluster_name', 'same_as_id'],
   additionalProperties: false,
 };
 
@@ -214,6 +216,7 @@ async function processIdea(idea) {
   if (fresh.seeds?.length) related = [...new Set([...related, ...fresh.seeds.filter((x) => ids.has(x))])];
   fresh.keyword = line(r.keyword).slice(0, 24);
   fresh.summary = line(r.summary);
+  if (fresh.text === idea.text) setClean(fresh, r.clean);
   fresh.links = related;
   fresh.clusterId = clusterId;
   fresh.status = 'done';
@@ -342,7 +345,8 @@ export async function runQueue({ forceRecluster = false } = {}) {
       emit(pending.length || forceRecluster ? 'pending' : 'idle');
       return;
     }
-    if (!pending.length && !forceRecluster) { emit('idle'); return; }
+    const needTidy = (await db.all('ideas')).some(needsClean);
+    if (!pending.length && !forceRecluster && !needTidy) { emit('idle'); return; }
 
     emit('busy');
     let since = (await db.getMeta('sinceRecluster')) || 0;
@@ -365,6 +369,7 @@ export async function runQueue({ forceRecluster = false } = {}) {
       await db.setMeta('sinceRecluster', since);
       emit('busy');
     }
+    await tidyMissing();
     const total = (await db.all('ideas')).length;
     if (forceRecluster || (since >= RECLUSTER_EVERY && total >= 4)) {
       await recluster();
@@ -557,4 +562,61 @@ export async function keepProposal(p) {
     if (o && !o.links?.includes(idea.id)) { o.links = [...(o.links || []), idea.id]; await db.put('ideas', o); }
   }
   return idea;
+}
+
+// ---------- 정리본: 두서없는 메모를 명료하게 ----------
+const needsClean = (i) => i.status === 'done' && i.cleanFor !== i.text;
+
+function setClean(idea, clean) {
+  const c = String(clean || '').trim();
+  // 원문보다 지나치게 길어지면 원문을 그대로 씀
+  idea.clean = c && c.length <= Math.max(idea.text.length * 1.2, idea.text.length + 20) ? c : idea.text.trim();
+  idea.cleanFor = idea.text;
+}
+
+const TIDY_SYSTEM = `너는 한 사람의 아이디어 메모를 정리해 주는 도우미다. 메모는 음성 인식이나 급하게 쓴 글이라 두서없을 수 있다.
+각 메모에 대해 다음을 JSON으로만 답한다.
+- items: [{ id, clean }]. 받은 모든 id에 대해 하나씩.
+- clean: 메모를 명료하고 깔끔하게 다시 쓴 글. 음성 인식 오류, 군더더기, 반복, 말 더듬은 정리하고 사용자가 말한 내용만 담는다. 새 내용, 꾸밈말, 과장, 해석을 덧붙이지 말 것. 생각의 순서와 핵심 표현은 살리되 짧게: 보통 1~3문장, 원문보다 길지 않게. 원문이 이미 깔끔하면 거의 그대로 둔다.`;
+
+const TIDY_SCHEMA = {
+  type: 'object',
+  properties: {
+    items: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { id: { type: 'string' }, clean: { type: 'string' } },
+        required: ['id', 'clean'],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ['items'],
+  additionalProperties: false,
+};
+
+// 정리본이 없거나 원문이 바뀐 기록을 15개씩 한 번에 다듬음
+async function tidyMissing() {
+  const todo = (await db.all('ideas')).filter(needsClean);
+  for (let k = 0; k < todo.length; k += 15) {
+    const batch = todo.slice(k, k + 15);
+    const user = batch.map((i) => `[${i.id}]\n${i.text.trim()}`).join('\n\n');
+    let r = { items: [] };
+    try {
+      r = await callClaude({ system: TIDY_SYSTEM, user, schema: TIDY_SCHEMA, maxTokens: 8000, kind: 'tidy' });
+    } catch (e) {
+      // 네트워크·인증·과부하는 나중에 다시. 그 외 실패는 원문을 정리본으로 두고 넘어감(무한 재시도 방지)
+      const st = e instanceof ApiError ? e.status : 0;
+      if (st === -1 || st === 401 || st === 403 || st === 429 || st >= 500) throw e;
+    }
+    const got = new Map((r.items || []).map((x) => [x.id, x.clean]));
+    for (const i of batch) {
+      const fresh = await db.get('ideas', i.id);
+      if (!fresh || fresh.text !== i.text) continue;
+      setClean(fresh, got.get(i.id));
+      await db.put('ideas', fresh);
+    }
+    emit('busy');
+  }
 }

@@ -143,6 +143,7 @@ async function openDetail(id) {
   const [it, clusters] = await Promise.all([db.get('ideas', id), db.all('clusters')]);
   if (!it) return;
   current = id;
+  showRaw = false;
   setEditing(false);
   setExtra(null);
   fillDetail(it, clusters);
@@ -156,13 +157,28 @@ function fillDetail(it, clusters) {
   const key = $('d-key');
   key.textContent = it.keyword ? (c ? `${it.keyword}  ·  ${c.name}` : it.keyword) : '…';
   key.style.color = it.keyword ? clusterColor(c ? c.color : null) : 'var(--dim)';
-  if ($('d-edit').hidden) $('d-text').textContent = it.text;
+  // 기본은 정리본, 작은 버튼으로 원문
+  const hasClean = it.clean && it.cleanFor === it.text && it.clean !== it.text.trim();
+  if ($('d-edit').hidden) {
+    $('d-text').textContent = hasClean && !showRaw ? it.clean : it.text;
+    $('d-text').classList.toggle('raw', hasClean && showRaw);
+  }
+  $('d-raw').hidden = !hasClean || !$('d-edit').hidden;
+  $('d-raw').textContent = showRaw ? '정리본' : '원문';
   $('d-date').textContent = fmt.format(new Date(it.createdAt));
   $('d-note').hidden = !it.aiNote;
   $('d-note').textContent = it.aiNote ? '✦ ' + it.aiNote : '';
 }
 
+let showRaw = false;
+$('d-raw').addEventListener('click', async () => {
+  showRaw = !showRaw;
+  const [it, clusters] = await Promise.all([db.get('ideas', current), db.all('clusters')]);
+  if (it) fillDetail(it, clusters);
+});
+
 function setEditing(on) {
+  $('d-raw').hidden = on || $('d-raw').hidden;
   $('d-edit').hidden = !on;
   $('d-text').hidden = on;
   $('d-save').hidden = !on;
