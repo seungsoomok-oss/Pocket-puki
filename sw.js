@@ -1,5 +1,5 @@
 // 앱 셸 캐시 (오프라인에서도 앱과 지난 보고서를 열 수 있게). API 호출은 캐시하지 않습니다.
-const CACHE = 'ai-interview-v1';
+const CACHE = 'ai-interview-v2';
 const SHELL = [
   './',
   './index.html',

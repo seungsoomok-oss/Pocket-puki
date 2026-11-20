@@ -8,7 +8,7 @@ AI 인터뷰어가 딱 10개의 질문을 하나씩 던지고, 답변에 따라 
 cd interview
 python3 -m http.server 8000   # 아무 정적 서버나 가능
 ```
-휴대폰에서 열고 ⚙︎ 설정에서 API 키(Anthropic 또는 OpenAI)를 입력하면 시작할 수 있습니다.
+휴대폰에서 열고 설정에서 API 키(Anthropic 또는 OpenAI)를 입력하면 시작할 수 있습니다.
 GitHub Pages·Netlify 등에 `interview/` 폴더를 그대로 올려도 됩니다. (Service Worker와 공유 시트는 HTTPS에서 동작)
 
 ## 구조

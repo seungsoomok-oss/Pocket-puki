@@ -66,37 +66,43 @@ function viewStart() {
   const count = store.listReports().length;
   app.innerHTML = `
     <main class="screen start">
-      <div class="top-actions">
+      <header class="topbar">
+        <span class="wordmark">10문 10답</span>
         <a href="#/settings" class="icon-btn" aria-label="설정"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></a>
-      </div>
-      <div class="hero">
-        <div class="badge">10문 10답</div>
-        <h1>당신은 어떤<br/>사람인가요?</h1>
-        <p class="lead">AI 인터뷰어가 딱 10개의 질문으로<br/>당신의 핵심을 짚고, 짧은 보고서로 정리해 드려요.</p>
-      </div>
-      ${
-        ongoing
-          ? `<section class="card resume">
-              <div>
-                <strong>${esc(ongoing.name)}</strong>님의 인터뷰가 진행 중이에요
-                <div class="muted">${ongoing.qa.length} / ${TOTAL_QUESTIONS} 답변 완료</div>
-              </div>
-              <button class="btn primary" id="resume">이어하기</button>
-            </section>`
-          : ''
-      }
+      </header>
+
+      <section class="hero">
+        <h1>질문 10개로<br/>나를 정리해 드릴게요</h1>
+        <p class="sub">AI 인터뷰어가 답변에 맞춰 질문을 이어가고,<br/>마지막에 한 장짜리 보고서를 만들어요.</p>
+      </section>
+
       ${
         !hasKey()
-          ? `<section class="notice">시작하려면 먼저 <a href="#/settings">설정</a>에서 AI API 키를 입력해 주세요.</section>`
+          ? `<a href="#/settings" class="row-card notice"><span>시작하려면 API 키가 필요해요</span><span class="row-action">설정하기 ›</span></a>`
           : ''
       }
-      <form id="start-form" class="stack">
-        <label for="name" class="label">이름 또는 닉네임</label>
-        <input id="name" name="name" maxlength="20" autocomplete="nickname" placeholder="예: 민지" required />
-        <button class="btn primary big" type="submit">${ongoing ? '새 인터뷰 시작' : '인터뷰 시작'}</button>
-        <p class="muted small center">10~15분 정도 걸려요. 조용한 곳에서 솔직하게 답할수록 정확해져요.</p>
+      ${
+        ongoing
+          ? `<button class="row-card" id="resume" type="button">
+              <span class="row-main"><span class="row-title">${esc(ongoing.name)}님 인터뷰 이어하기</span><span class="row-sub">${ongoing.qa.length}개 답변 완료 · ${TOTAL_QUESTIONS - ongoing.qa.length}개 남음</span></span>
+              <span class="chev" aria-hidden="true">›</span>
+            </button>`
+          : ''
+      }
+
+      <form id="start-form" class="field-group">
+        <label for="name" class="field-label">이름 또는 닉네임</label>
+        <input id="name" name="name" class="field" maxlength="20" autocomplete="nickname" placeholder="이름을 입력해 주세요" required />
       </form>
-      <a href="#/history" class="link-row">지난 보고서 <span class="muted">${count}개</span> <span aria-hidden="true">›</span></a>
+
+      <nav class="list">
+        <a href="#/history" class="list-row"><span>지난 보고서</span><span class="list-meta">${count}개 <span class="chev" aria-hidden="true">›</span></span></a>
+      </nav>
+
+      <div class="cta-bar">
+        <p class="cta-note">약 10분 · 솔직할수록 정확해요</p>
+        <button class="btn primary block" type="submit" form="start-form">${ongoing ? '새로 시작하기' : '시작하기'}</button>
+      </div>
     </main>`;
 
   document.getElementById('resume')?.addEventListener('click', () => go(`#/interview/${ongoing.id}`));
@@ -131,18 +137,21 @@ function viewInterview(id) {
   app.innerHTML = `
     <main class="screen interview">
       <header class="progress-head">
-        <button class="icon-btn" id="home" aria-label="처음으로">‹</button>
-        <div class="progress-wrap">
-          <div class="progress-label"><strong>${number}</strong> / ${TOTAL_QUESTIONS}</div>
-          <div class="progress"><div class="bar" style="width:${pct}%"></div></div>
-        </div>
-        <span class="icon-btn ghost"></span>
+        <button class="icon-btn" id="home" aria-label="처음으로"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
+        <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="${TOTAL_QUESTIONS}" aria-valuenow="${number}"><div class="bar" style="width:${pct}%"></div></div>
+        <span class="progress-label"><strong>${number}</strong>/${TOTAL_QUESTIONS}</span>
       </header>
+
+      <section class="question-area" id="qarea" aria-live="polite"></section>
+
+      <form id="answer-form" class="answer" hidden>
+        <textarea id="answer" class="field-area" rows="6" placeholder="떠오르는 장면이나 경험을 편하게 적어 주세요"></textarea>
+      </form>
 
       ${
         iv.qa.length
           ? `<details class="history">
-              <summary>이전 문답 보기 (${iv.qa.length})</summary>
+              <summary>지금까지의 답변 <span class="count">${iv.qa.length}</span></summary>
               <ol>${iv.qa
                 .map((x) => `<li><p class="q">${esc(x.question)}</p><p class="a">${esc(x.answer) || '<span class="muted">(답변 없음)</span>'}</p></li>`)
                 .join('')}</ol>
@@ -150,13 +159,10 @@ function viewInterview(id) {
           : ''
       }
 
-      <section class="question-area" id="qarea" aria-live="polite"></section>
-
-      <form id="answer-form" class="answer stack" hidden>
-        <textarea id="answer" rows="6" placeholder="떠오르는 장면이나 경험을 구체적으로 적어 주세요."></textarea>
+      <div class="cta-bar" id="cta" hidden>
         <p class="hint" id="hint" hidden>조금 더 구체적으로 말해주실래요? 그대로 넘어가도 괜찮아요.</p>
-        <button class="btn primary big" type="submit" id="next">${number === TOTAL_QUESTIONS ? '답변 완료 · 분석하기' : '다음'}</button>
-      </form>
+        <button class="btn primary block" type="submit" form="answer-form" id="next">${number === TOTAL_QUESTIONS ? '보고서 받기' : '다음'}</button>
+      </div>
     </main>`;
 
   document.getElementById('home').addEventListener('click', () => go('#/'));
@@ -164,6 +170,7 @@ function viewInterview(id) {
   const form = document.getElementById('answer-form');
   const ta = document.getElementById('answer');
   const hint = document.getElementById('hint');
+  const cta = document.getElementById('cta');
   let warned = false;
 
   ta.value = iv.draft || '';
@@ -181,13 +188,15 @@ function viewInterview(id) {
   });
 
   function showQuestion(q) {
-    qarea.innerHTML = `<p class="q-number">Q${number}</p><h2 class="question">${esc(q.question)}</h2>`;
+    qarea.innerHTML = `<p class="q-number">질문 ${number}</p><h2 class="question">${esc(q.question)}</h2>`;
     form.hidden = false;
+    cta.hidden = false;
     setTimeout(() => ta.focus({ preventScroll: true }), 50);
   }
 
   function showLoading() {
     form.hidden = true;
+    cta.hidden = true;
     let i = 0;
     qarea.innerHTML = `<div class="loading"><div class="dots"><span></span><span></span><span></span></div><p id="lt">${THINKING[0]}</p></div>`;
     const timer = setInterval(() => {
@@ -199,6 +208,8 @@ function viewInterview(id) {
   }
 
   function showError(err, retry) {
+    form.hidden = true;
+    cta.hidden = true;
     qarea.innerHTML = `<div class="error-box">
         <p>${esc(err.message || '문제가 생겼어요.')}</p>
         <div class="row">
@@ -270,10 +281,9 @@ function viewAnalyzing(id) {
     app.innerHTML = `
       <main class="screen analyzing">
         <div class="loading big">
-          <div class="orb"></div>
-          <h2>${esc(iv.name)}님을 분석하고 있어요</h2>
+          <div class="spinner" aria-hidden="true"></div>
+          <h2>${esc(iv.name)}님의 답변을<br/>정리하고 있어요</h2>
           <p id="lt">${ANALYZING[0]}</p>
-          <p class="muted small">30초~1분 정도 걸려요</p>
         </div>
       </main>`;
     const timer = setInterval(() => {
@@ -316,15 +326,15 @@ function viewReport(id) {
   app.innerHTML = `
     <main class="screen report">
       <header class="bar-head">
-        <button class="icon-btn" id="back" aria-label="뒤로">‹</button>
+        <button class="icon-btn" id="back" aria-label="뒤로"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
         <span class="muted small">${fmtDate(rec.createdAt)}</span>
         <span class="icon-btn ghost"></span>
       </header>
 
       <article class="report-card" id="report-card">
         <div class="rc-head">
-          <div class="rc-kicker">${esc(rec.name)}은(는) 어떤 사람인가</div>
-          <h1 class="rc-oneliner">“${esc(r.oneLiner)}”</h1>
+          <div class="rc-kicker">${esc(rec.name)}님은 이런 사람이에요</div>
+          <h1 class="rc-oneliner">${esc(r.oneLiner)}</h1>
         </div>
 
         <section class="rc-section">
@@ -336,7 +346,7 @@ function viewReport(id) {
                   <div class="t-name">${esc(t.name)}</div>
                   <p class="t-desc">${esc(t.description)}</p>
                   ${(t.evidence || [])
-                    .map((e) => `<blockquote><span class="qno">Q${esc(e.questionNo)}</span>${esc(e.quote)}</blockquote>`)
+                    .map((e) => `<blockquote><span class="qno">답변 ${esc(e.questionNo)}</span>${esc(e.quote)}</blockquote>`)
                     .join('')}
                 </li>`
               )
@@ -359,14 +369,18 @@ function viewReport(id) {
           <p class="summary">${esc(r.summary)}</p>
         </section>
 
-        <footer class="rc-foot">AI 인터뷰 · 10문 10답 · ${fmtDate(rec.createdAt)}</footer>
+        <footer class="rc-foot"><span>10문 10답</span><span>${fmtDate(rec.createdAt)}</span></footer>
       </article>
 
-      <div class="actions">
-        <button class="btn primary" id="save-img">이미지로 저장</button>
-        <button class="btn primary" id="share">공유</button>
-        <button class="btn" id="copy">텍스트 복사</button>
-        <button class="btn" id="home">처음으로</button>
+      <div class="text-actions">
+        <button class="text-btn" id="copy">텍스트 복사</button>
+        <span class="sep" aria-hidden="true"></span>
+        <button class="text-btn" id="home">처음으로</button>
+      </div>
+
+      <div class="cta-bar two">
+        <button class="btn secondary" id="save-img">이미지 저장</button>
+        <button class="btn primary" id="share">공유하기</button>
       </div>
     </main>`;
 
@@ -392,7 +406,7 @@ function viewReport(id) {
       toast(err.message || '이미지를 만들지 못했어요');
     } finally {
       btn.disabled = false;
-      btn.textContent = '이미지로 저장';
+      btn.textContent = '이미지 저장';
     }
   });
 }
@@ -403,7 +417,7 @@ function viewHistory() {
   app.innerHTML = `
     <main class="screen history-list">
       <header class="bar-head">
-        <button class="icon-btn" id="back" aria-label="처음으로">‹</button>
+        <button class="icon-btn" id="back" aria-label="처음으로"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
         <h2>지난 보고서</h2>
         <span class="icon-btn ghost"></span>
       </header>
@@ -440,7 +454,7 @@ function viewSettings() {
   app.innerHTML = `
     <main class="screen settings">
       <header class="bar-head">
-        <button class="icon-btn" id="back" aria-label="처음으로">‹</button>
+        <button class="icon-btn" id="back" aria-label="처음으로"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
         <h2>설정</h2>
         <span class="icon-btn ghost"></span>
       </header>
@@ -481,7 +495,7 @@ function viewSettings() {
         </div>
 
         <p class="muted small">API 키는 이 기기의 브라우저에만 저장되며, 선택한 AI 회사의 API 외에는 어디로도 보내지 않습니다.</p>
-        <button class="btn primary big" type="submit">저장</button>
+        <button class="btn primary block" type="submit">저장</button>
       </form>
 
       <section class="danger">
