@@ -108,9 +108,36 @@ export function submitAnswer(iv, answer) {
 
 const norm = (s) => String(s).replace(/[\s"'“”‘’.,!?…·~\-]/g, '').toLowerCase();
 
-export function validateReport(r, qa) {
+// 공유용 텍스트(시·상징·키워드)에 답변 원문이 그대로 들어갔는지 검사
+export function findLeaks(r, qa, name = '') {
+  const N = 9; // 공백·문장부호 제외 9글자 이상 연속 일치하면 원문 노출로 봄
+  const answers = qa.map((x) => norm(x.answer || ''));
+  const pub = [r?.symbol, ...(r?.keywords || []), r?.poem?.title, ...(r?.poem?.lines || [])].filter(Boolean);
+  const leaks = [];
+  for (const text of pub) {
+    const t = norm(text);
+    for (let i = 0; i + N <= t.length; i++) {
+      const g = t.slice(i, i + N);
+      if (answers.some((a) => a.includes(g))) {
+        leaks.push(`공유용 시에 답변 원문 표현이 그대로 들어 있습니다: "${text}". 은유로 바꾸세요.`);
+        break;
+      }
+    }
+    if (name && name.length >= 2 && text.includes(name)) leaks.push(`공유용 시에 대상자 이름을 넣지 마세요: "${text}"`);
+  }
+  return leaks;
+}
+
+export function validateReport(r, qa, name = '') {
   const problems = [];
   if (!r || typeof r !== 'object') return ['JSON 객체가 아닙니다.'];
+  const lines = (r.poem?.lines || []).filter((l) => String(l).trim());
+  if (!r.poem?.title?.trim()) problems.push('poem.title이 비어 있습니다.');
+  if (lines.length < 6 || lines.length > 14) problems.push('poem.lines는 내용 있는 행이 8~12행이어야 합니다.');
+  if (!r.symbol?.trim()) problems.push('symbol이 비어 있습니다.');
+  if (!Array.isArray(r.keywords) || r.keywords.length < 2) problems.push('keywords는 3개여야 합니다.');
+  if (!r.letter?.trim()) problems.push('letter가 비어 있습니다.');
+  problems.push(...findLeaks(r, qa, name));
   if (!r.oneLiner?.trim()) problems.push('oneLiner가 비어 있습니다.');
   if (!Array.isArray(r.traits) || r.traits.length < 3 || r.traits.length > 5) problems.push('traits는 3~5개여야 합니다.');
   (r.traits || []).forEach((t, i) => {
@@ -142,12 +169,20 @@ export async function generateReport(iv) {
   let problems = [];
   for (let attempt = 0; attempt < 2; attempt++) {
     r = await callJSON({ system, user, schema: REPORT_SCHEMA, schemaName: 'profile_report', effort: 'high' });
-    problems = validateReport(r, iv.qa);
+    problems = validateReport(r, iv.qa, iv.name);
     if (!problems.length) break;
     user += RETRY_NOTE(problems);
   }
-  // 재시도 후에도 구조가 깨졌으면 실패. 인용 불일치 정도는 표시하되 진행.
-  const fatal = problems.filter((p) => !p.includes('원문에 없습니다'));
+  // 재시도 후에도 구조가 깨졌으면 실패. 인용 불일치는 진행.
+  // 원문 노출이 남아 있으면 해당 행을 공유 화면에서 숨김 처리.
+  const fatal = problems.filter((p) => !p.includes('원문에 없습니다') && !p.startsWith('공유용 시에'));
+  if (problems.some((p) => p.startsWith('공유용 시에'))) {
+    const leaky = new Set(findLeaks(r, iv.qa, iv.name).map((p) => (p.match(/"(.*)"/) || [])[1]));
+    r.poem.lines = r.poem.lines.filter((l) => !leaky.has(l));
+    r.keywords = (r.keywords || []).filter((k) => !leaky.has(k));
+    if (leaky.has(r.symbol)) r.symbol = '';
+    if (leaky.has(r.poem.title)) r.poem.title = '무제';
+  }
   if (fatal.length) throw new LLMError('보고서 형식이 올바르지 않습니다. 다시 시도해 주세요.', { kind: 'parse' });
 
   const rec = { interviewId: iv.id, name: iv.name, createdAt: Date.now(), report: r };
