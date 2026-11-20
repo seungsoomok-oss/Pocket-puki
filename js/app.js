@@ -1,7 +1,7 @@
 import { TOTAL_QUESTIONS } from './prompts.js';
 import * as store from './storage.js';
 import { createInterview, generateNextQuestion, submitAnswer, generateReport } from './interview.js';
-import { reportToText, copyText, shareText, saveCardImage } from './share.js';
+import { reportToText, poemToText, copyText, shareText, saveCardImage } from './share.js';
 
 const app = document.getElementById('app');
 const SHORT_ANSWER = 20; // 이 글자 수보다 짧으면 한 번 안내
@@ -265,8 +265,9 @@ function viewInterview(id) {
 const ANALYZING = [
   '10개의 답변을 다시 읽고 있어요',
   '반복되는 단서를 찾는 중이에요',
-  '근거가 되는 문장을 고르는 중이에요',
-  '한 문장으로 정리하는 중이에요',
+  '마음에 남은 장면을 고르는 중이에요',
+  '한 편의 시로 옮기는 중이에요',
+  '편지를 쓰고 있어요',
 ];
 
 function viewAnalyzing(id) {
@@ -317,30 +318,38 @@ function viewAnalyzing(id) {
 }
 
 // ── 보고서 화면 ──
+const LOCK = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
+
 function viewReport(id) {
   const rec = store.getReport(id);
   if (!rec) return go('#/history');
   const r = rec.report;
-  const list = (arr) => `<ul>${arr.map((s) => `<li>${esc(s)}</li>`).join('')}</ul>`;
+  const hasPoem = !!r.poem?.lines?.length;
+  const list = (arr) => `<ul>${(arr || []).map((s) => `<li>${esc(s)}</li>`).join('')}</ul>`;
 
-  app.innerHTML = `
-    <main class="screen report">
-      <header class="bar-head">
-        <button class="icon-btn" id="back" aria-label="뒤로"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
-        <span class="muted small">${fmtDate(rec.createdAt)}</span>
-        <span class="icon-btn ghost"></span>
-      </header>
+  const poemCard = hasPoem
+    ? `<article class="poem-card" id="share-card">
+        <div class="pc-top"><span>${esc(rec.name)}님에게</span><span class="pc-brand">10문 10답</span></div>
+        ${r.symbol ? `<p class="pc-symbol">${esc(r.symbol)}</p>` : ''}
+        <h1 class="pc-title">${esc(r.poem.title)}</h1>
+        <div class="pc-poem">${r.poem.lines
+          .map((l) => (String(l).trim() ? `<p>${esc(l)}</p>` : '<span class="stanza"></span>'))
+          .join('')}</div>
+        ${(r.keywords || []).length ? `<div class="pc-keys">${r.keywords.map((k) => `<span>${esc(k)}</span>`).join('')}</div>` : ''}
+      </article>
+      <p class="share-note">공유하기와 이미지 저장에는 이 카드만 담겨요</p>`
+    : '';
 
+  const analysis = `
       <article class="report-card" id="report-card">
         <div class="rc-head">
           <div class="rc-kicker">${esc(rec.name)}님은 이런 사람이에요</div>
-          <h1 class="rc-oneliner">${esc(r.oneLiner)}</h1>
+          <h2 class="rc-oneliner">${esc(r.oneLiner)}</h2>
         </div>
-
         <section class="rc-section">
           <h3>핵심 특성</h3>
           <ol class="traits">
-            ${r.traits
+            ${(r.traits || [])
               .map(
                 (t) => `<li>
                   <div class="t-name">${esc(t.name)}</div>
@@ -353,27 +362,46 @@ function viewReport(id) {
               .join('')}
           </ol>
         </section>
-
         <section class="rc-section two">
           <div><h3>강점</h3>${list(r.strengths)}</div>
           <div><h3>주의할 점</h3>${list(r.blindSpots)}</div>
         </section>
-
         <section class="rc-section">
-          <h3>이 사람을 움직이는 것</h3>
+          <h3>나를 움직이는 것</h3>
           ${list(r.motivations)}
         </section>
-
         <section class="rc-section">
           <h3>요약</h3>
           <p class="summary">${esc(r.summary)}</p>
         </section>
+        ${hasPoem ? '' : `<footer class="rc-foot"><span>10문 10답</span><span>${fmtDate(rec.createdAt)}</span></footer>`}
+      </article>`;
 
-        <footer class="rc-foot"><span>10문 10답</span><span>${fmtDate(rec.createdAt)}</span></footer>
-      </article>
+  app.innerHTML = `
+    <main class="screen report">
+      <header class="bar-head">
+        <button class="icon-btn" id="back" aria-label="뒤로"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
+        <span class="muted small">${fmtDate(rec.createdAt)}</span>
+        <span class="icon-btn ghost"></span>
+      </header>
+
+      ${poemCard}
+
+      ${
+        hasPoem
+          ? `<section class="private">
+              <div class="private-head">${LOCK}<span>나만 보기</span></div>
+              ${r.letter ? `<div class="letter"><h3>인터뷰어가 보내는 편지</h3><p>${esc(r.letter)}</p></div>` : ''}
+              <details class="analysis">
+                <summary>답변으로 본 분석</summary>
+                ${analysis}
+              </details>
+            </section>`
+          : analysis
+      }
 
       <div class="text-actions">
-        <button class="text-btn" id="copy">텍스트 복사</button>
+        <button class="text-btn" id="copy">${hasPoem ? '시 복사' : '텍스트 복사'}</button>
         <span class="sep" aria-hidden="true"></span>
         <button class="text-btn" id="home">처음으로</button>
       </div>
@@ -384,14 +412,16 @@ function viewReport(id) {
       </div>
     </main>`;
 
-  const text = reportToText(rec);
+  const text = hasPoem ? poemToText(rec) : reportToText(rec);
+  const cardEl = document.getElementById(hasPoem ? 'share-card' : 'report-card');
+  const title = hasPoem ? `${rec.name}님을 위한 시` : `${rec.name}은(는) 어떤 사람인가`;
   document.getElementById('back').addEventListener('click', () => go('#/history'));
   document.getElementById('home').addEventListener('click', () => go('#/'));
   document.getElementById('copy').addEventListener('click', async () => {
-    toast((await copyText(text)) ? '보고서 텍스트를 복사했어요' : '복사하지 못했어요');
+    toast((await copyText(text)) ? '복사했어요' : '복사하지 못했어요');
   });
   document.getElementById('share').addEventListener('click', async () => {
-    const res = await shareText(`${rec.name}은(는) 어떤 사람인가`, text);
+    const res = await shareText(title, text);
     if (res === 'copied') toast('공유를 지원하지 않아 텍스트를 복사했어요');
     if (res === 'failed') toast('공유하지 못했어요');
   });
@@ -400,7 +430,7 @@ function viewReport(id) {
     btn.disabled = true;
     btn.textContent = '이미지 만드는 중…';
     try {
-      const res = await saveCardImage(document.getElementById('report-card'), `${rec.name}-보고서-${fmtDate(rec.createdAt)}.png`);
+      const res = await saveCardImage(cardEl, `${rec.name}-10문10답-${fmtDate(rec.createdAt)}.png`);
       if (res === 'downloaded') toast('이미지를 저장했어요');
     } catch (err) {
       toast(err.message || '이미지를 만들지 못했어요');
@@ -428,7 +458,7 @@ function viewHistory() {
                 (r) => `<li>
                   <a href="#/report/${esc(r.interviewId)}" class="r-item">
                     <div class="r-meta"><strong>${esc(r.name)}</strong><span class="muted small">${fmtDate(r.createdAt)}</span></div>
-                    <p class="r-line">${esc(r.report.oneLiner)}</p>
+                    <p class="r-line">${esc(r.report.poem?.title ? `「${r.report.poem.title}」` : r.report.oneLiner)}</p>
                   </a>
                   <button class="del" data-id="${esc(r.interviewId)}" aria-label="삭제">삭제</button>
                 </li>`

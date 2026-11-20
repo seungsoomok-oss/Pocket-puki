@@ -28,6 +28,16 @@ export function reportToText(rec) {
   return lines.join('\n');
 }
 
+// 공유용: 시만 (사적인 분석·편지는 포함하지 않음)
+export function poemToText(rec) {
+  const r = rec.report;
+  const out = [`「${r.poem.title}」`, ''];
+  r.poem.lines.forEach((l) => out.push(String(l).trim() ? l : ''));
+  if (r.keywords?.length) out.push('', r.keywords.map((k) => `#${k.replace(/\s+/g, '')}`).join(' '));
+  out.push('', `— ${rec.name}님을 위한 시, 10문 10답`);
+  return out.join('\n');
+}
+
 export async function copyText(text) {
   try {
     await navigator.clipboard.writeText(text);
